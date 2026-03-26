@@ -130,33 +130,33 @@ PROMPT
   if [[ -n "$response" ]]; then
     echo "[refiner] Got response from claude, posting comment on #$number"
     gh issue edit "$number" --repo "$REPO" --add-label "refining"
-    gh issue comment "$number" --repo "$REPO" --body "$response"
+    gh issue comment "$number" --repo "$REPO" --body "${REFINER_MARKER}
+${response}"
     echo "[refiner] Issue #$number labeled 'refining' and comment posted"
   else
     echo "[refiner] Error: empty response from claude for issue #$number" >&2
   fi
 }
 
-# Check if the last comment on an issue was made by a human (not us or a bot)
-# Returns 0 (true) if human, 1 (false) if bot/ourselves
+REFINER_MARKER="<!-- gh-claudecode:refiner -->"
+
+# Check if the last comment on an issue was made by a human (not the refiner)
+# Returns 0 (true) if human, 1 (false) if refiner comment
+# Uses a hidden HTML marker instead of author login (supports same-account usage)
 last_comment_is_human() {
   local number="$1"
-  local my_login
-  my_login=$(gh api user -q '.login')
 
-  local last_author
-  last_author=$(gh issue view "$number" --repo "$REPO" --json comments \
-    -q '.comments[-1].author.login // empty')
+  local last_body
+  last_body=$(gh issue view "$number" --repo "$REPO" --json comments \
+    -q '.comments[-1].body // empty')
 
   # No comments yet — treat as human (the body itself is from human)
-  if [[ -z "$last_author" ]]; then
+  if [[ -z "$last_body" ]]; then
     return 0
   fi
 
-  # If last comment is from us, a [bot], or github-actions → not human
-  if [[ "$last_author" == "$my_login" ]] \
-    || [[ "$last_author" == *"[bot]"* ]] \
-    || [[ "$last_author" == "github-actions" ]]; then
+  # If last comment contains our marker → not human
+  if echo "$last_body" | grep -qF "$REFINER_MARKER"; then
     return 1
   fi
 
@@ -245,11 +245,13 @@ ${checklist}"
 
     gh issue edit "$number" --repo "$REPO" --body "$new_body"
     gh issue edit "$number" --repo "$REPO" --remove-label "refining" --add-label "ready"
-    gh issue comment "$number" --repo "$REPO" --body "Refinement complete. All checklist items have been filled. This issue is now **ready** for development."
+    gh issue comment "$number" --repo "$REPO" --body "${REFINER_MARKER}
+Refinement complete. All checklist items have been filled. This issue is now **ready** for development."
     echo "[refiner] Issue #$number is now ready"
   else
     echo "[refiner] Posting follow-up questions on issue #$number"
-    gh issue comment "$number" --repo "$REPO" --body "$response"
+    gh issue comment "$number" --repo "$REPO" --body "${REFINER_MARKER}
+${response}"
   fi
 }
 
