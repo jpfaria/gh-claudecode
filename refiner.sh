@@ -58,6 +58,41 @@ done
 echo "[refiner] Starting for $REPO (interval: ${REFINER_INTERVAL}s, model: $CLAUDE_MODEL)"
 
 # ---------------------------------------------------------------------------
+# Load project context from target repo (CLAUDE.md, PRODUCT.md)
+# ---------------------------------------------------------------------------
+
+REPO_CONTEXT=""
+
+fetch_repo_file() {
+  local path="$1"
+  gh api "repos/$REPO/contents/$path" -q '.content' 2>/dev/null | base64 -d 2>/dev/null || echo ""
+}
+
+echo "[refiner] Loading project context from $REPO..."
+claude_md=$(fetch_repo_file "CLAUDE.md")
+product_md=$(fetch_repo_file "PRODUCT.md")
+
+if [[ -n "$claude_md" ]]; then
+  REPO_CONTEXT="${REPO_CONTEXT}
+
+## Project Technical Context (CLAUDE.md)
+${claude_md}"
+  echo "[refiner] Loaded CLAUDE.md"
+fi
+
+if [[ -n "$product_md" ]]; then
+  REPO_CONTEXT="${REPO_CONTEXT}
+
+## Product Context (PRODUCT.md)
+${product_md}"
+  echo "[refiner] Loaded PRODUCT.md"
+fi
+
+if [[ -z "$REPO_CONTEXT" ]]; then
+  echo "[refiner] Warning: no CLAUDE.md or PRODUCT.md found in $REPO"
+fi
+
+# ---------------------------------------------------------------------------
 # Functions
 # ---------------------------------------------------------------------------
 
@@ -105,11 +140,11 @@ start_refinement() {
 
   local prompt
   prompt=$(cat <<PROMPT
-You are a friendly product assistant helping to understand a GitHub issue from the repository **$REPO**.
+You are a product manager who deeply understands the project **$REPO**. You know the codebase, the architecture, and the business domain. But right now you are talking to an END USER who does NOT know any of that.
 
-IMPORTANT: This issue is about the $REPO project, NOT about the tool posting this comment. Respond in the context of that project.
+${REPO_CONTEXT}
 
-IMPORTANT: You are talking to an END USER, not a developer. Do NOT ask technical questions about files, modules, architecture, code, or complexity. Only ask about what the user experiences and what they want.
+---
 
 Issue #$number: $title
 
@@ -118,16 +153,18 @@ $body
 
 ---
 
-Before this issue can move to development, we need to understand these 4 items:
+YOUR ROLE: Interview the user to understand what they need. Ask ONLY functional/UX questions — things a non-technical user can answer. NEVER ask about files, modules, code, architecture, or complexity.
+
+You need to understand these 4 items from the user:
 
 1. **Problem / objective** — what is happening (or not happening) and why it matters
 2. **Expected behavior** — what the user expects to see or experience instead
-3. **Type** — is this a bug (something broken), a feature (something new), or an enhancement (improving something existing)?
-4. **Priority** — how important is this? low (nice to have), medium (should fix soon), high (blocking work)
+3. **Type** — bug (something broken), feature (something new), or enhancement (improving existing)
+4. **Priority** — low (nice to have), medium (should fix soon), high (blocking work)
 
-Analyze the issue text and determine which items are already clear. For missing items, ask simple questions that a non-technical user can answer. Focus on the user experience, not the implementation.
+Analyze the issue text and determine which items are already clear. For missing items, ask simple questions. Be concise, friendly, use markdown. Write in the same language as the issue.
 
-Reply ONLY with the comment text to be posted on the issue. Be concise, friendly, use markdown. Write in the same language as the issue (if Portuguese, reply in Portuguese).
+Reply ONLY with the comment text to be posted on the issue.
 PROMPT
   )
 
@@ -186,11 +223,11 @@ continue_refinement() {
 
   local prompt
   prompt=$(cat <<PROMPT
-You are a friendly product assistant refining a GitHub issue from the repository **$REPO**.
+You are a product manager who deeply understands the project **$REPO**. You know the codebase, the architecture, and the business domain. But right now you are talking to an END USER who does NOT know any of that.
 
-IMPORTANT: This issue is about the $REPO project, NOT about the tool posting this comment. Respond in the context of that project.
+${REPO_CONTEXT}
 
-IMPORTANT: You are talking to an END USER, not a developer. Do NOT ask technical questions about files, modules, architecture, code, or complexity. Only ask about what the user experiences and what they want.
+---
 
 Issue #$number: $title
 
@@ -202,23 +239,37 @@ $comments
 
 ---
 
-The following 4 items must be clear before this issue can move to development:
+PHASE 1 — USER INTERVIEW (functional questions only):
+
+Check if these 4 items are clear from the conversation:
 
 1. **Problem / objective** — what is happening (or not happening) and why it matters
 2. **Expected behavior** — what the user expects to see or experience instead
 3. **Type** — bug (something broken), feature (something new), or enhancement (improving existing)
 4. **Priority** — low (nice to have), medium (should fix soon), high (blocking work)
 
-Analyze ALL content above (body + comments). If ALL 4 items can be confidently filled from the existing information, respond with EXACTLY:
+If ANY of these 4 items are still missing or unclear, respond ONLY with a follow-up comment asking simple functional questions. NEVER ask about files, code, or architecture. Be concise, friendly. Write in the same language as the conversation.
+
+---
+
+PHASE 2 — TECHNICAL ENRICHMENT (only if all 4 items above are clear):
+
+If ALL 4 functional items are clear, use YOUR knowledge of the project (from the context above) to fill the technical details yourself. The user does NOT need to answer these — you infer them.
+
+Respond with EXACTLY:
 
 CHECKLIST_COMPLETE
 ---
-- [x] **Problem / objective** — <filled summary>
-- [x] **Expected behavior** — <filled summary>
+## Functional
+- [x] **Problem / objective** — <filled from conversation>
+- [x] **Expected behavior** — <filled from conversation>
 - [x] **Type** — <filled value>
 - [x] **Priority** — <filled value>
 
-If ANY items are still missing or unclear, respond ONLY with a follow-up comment asking simple questions that a non-technical user can answer. Focus on the experience, not the code. Be concise, friendly, use markdown. Write in the same language as the conversation.
+## Technical (inferred by refiner)
+- [x] **Affected files / modules** — <your best inference from project knowledge>
+- [x] **Proposed approach** — <high-level solution based on project architecture>
+- [x] **Complexity estimate** — S / M / L / XL
 PROMPT
   )
 
