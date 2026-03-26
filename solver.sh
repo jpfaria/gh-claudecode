@@ -92,6 +92,178 @@ get_in_progress_issues() {
   gh issue list --repo "$REPO" --state open --label in-progress --json number,title
 }
 
+check_stale() {
+  local number="$1"
+
+  echo "[solver] Checking stale for issue #$number"
+
+  # Get the last comment starting with "[solver] Started at"
+  local comments
+  comments=$(gh issue view "$number" --repo "$REPO" --json comments --jq '.comments | map(select(.body | startswith("[solver] Started at"))) | last')
+
+  if [[ -z "$comments" || "$comments" == "null" ]]; then
+    echo "[solver] No '[solver] Started at' comment found for #$number — marking as failed"
+    gh issue edit "$number" --repo "$REPO" --remove-label in-progress --add-label failed
+    gh issue comment "$number" --repo "$REPO" --body "[solver] Marked as failed: no start timestamp found."
+    return
+  fi
+
+  local created_at
+  created_at=$(gh issue view "$number" --repo "$REPO" --json comments --jq '[.comments[] | select(.body | startswith("[solver] Started at"))] | last | .createdAt')
+
+  # Parse timestamp (macOS vs Linux)
+  local started_epoch
+  if started_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$created_at" "+%s" 2>/dev/null); then
+    : # macOS succeeded
+  else
+    started_epoch=$(date -d "$created_at" "+%s")
+  fi
+
+  local now_epoch
+  now_epoch=$(date +%s)
+
+  local elapsed=$(( now_epoch - started_epoch ))
+
+  if [[ "$elapsed" -gt "$SOLVER_TIMEOUT" ]]; then
+    echo "[solver] Issue #$number timed out (${elapsed}s > ${SOLVER_TIMEOUT}s)"
+
+    # Cleanup worktree if exists
+    if [[ -d "$WORKTREE_DIR/issue-$number" ]]; then
+      git -C "$REPO_DIR" worktree remove "$WORKTREE_DIR/issue-$number" --force || true
+    fi
+
+    gh issue edit "$number" --repo "$REPO" --remove-label in-progress --add-label failed
+    gh issue comment "$number" --repo "$REPO" --body "[solver] Marked as failed: timed out after ${elapsed}s (limit: ${SOLVER_TIMEOUT}s)."
+  else
+    echo "[solver] Issue #$number still within timeout (${elapsed}s / ${SOLVER_TIMEOUT}s)"
+  fi
+}
+
+solve_issue() {
+  local number="$1"
+  local title="$2"
+
+  echo "[solver] Solving issue #$number — $title"
+
+  # Swap labels: approved -> in-progress
+  gh issue edit "$number" --repo "$REPO" --remove-label approved --add-label in-progress
+
+  # Comment with start timestamp
+  local start_ts
+  start_ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+  gh issue comment "$number" --repo "$REPO" --body "[solver] Started at $start_ts"
+
+  # Fetch issue body and comments
+  local issue_body
+  issue_body=$(gh issue view "$number" --repo "$REPO" --json body --jq '.body')
+  local issue_comments
+  issue_comments=$(gh issue view "$number" --repo "$REPO" --json comments --jq '[.comments[].body] | join("\n---\n")')
+
+  # Determine branch type from checklist
+  local branch_type="feature"
+  if echo "$issue_body" | grep -qi "type" && echo "$issue_body" | grep -qi "bug"; then
+    branch_type="bugfix"
+  fi
+
+  # Create slug from title
+  local slug
+  slug=$(echo "$title" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//' | cut -c1-40)
+
+  local branch="${branch_type}/issue-${number}-${slug}"
+
+  echo "[solver] Branch: $branch"
+
+  # Update repo
+  git -C "$REPO_DIR" fetch origin
+
+  local base_branch="main"
+  if git -C "$REPO_DIR" rev-parse --verify origin/develop &>/dev/null; then
+    base_branch="develop"
+  fi
+
+  git -C "$REPO_DIR" checkout "$base_branch"
+  git -C "$REPO_DIR" pull origin "$base_branch"
+
+  # Create worktree
+  local wt_dir="$WORKTREE_DIR/issue-$number"
+  git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch"
+
+  # Build prompt for claude
+  local prompt
+  prompt=$(cat <<PROMPT_EOF
+You are solving GitHub issue #$number for this repository.
+
+## Issue Title
+$title
+
+## Issue Body
+$issue_body
+
+## Issue Comments
+$issue_comments
+
+## Instructions
+1. Read CLAUDE.md in the project root for project context and conventions.
+2. Implement the solution for this issue.
+3. Follow all coding conventions described in the project.
+4. Make sure the code compiles/runs without errors or warnings.
+5. Commit your changes with a message that includes "Closes #$number".
+6. Do NOT push — the automation will handle pushing.
+PROMPT_EOF
+)
+
+  # Run claude
+  echo "[solver] Running claude on worktree $wt_dir"
+  local claude_exit=0
+  (cd "$wt_dir" && echo "$prompt" | claude --model "$CLAUDE_MODEL" -p) || claude_exit=$?
+
+  if [[ "$claude_exit" -ne 0 ]]; then
+    echo "[solver] Claude failed with exit code $claude_exit for #$number"
+    gh issue edit "$number" --repo "$REPO" --remove-label in-progress --add-label failed
+    gh issue comment "$number" --repo "$REPO" --body "[solver] Failed: claude exited with code $claude_exit."
+    git -C "$REPO_DIR" worktree remove "$wt_dir" --force || true
+    return
+  fi
+
+  # Check if any commits were made
+  local commit_count
+  commit_count=$(git -C "$wt_dir" rev-list --count "$base_branch".."$branch" 2>/dev/null || echo "0")
+
+  if [[ "$commit_count" -eq 0 ]]; then
+    echo "[solver] No commits made for #$number — marking as failed"
+    gh issue edit "$number" --repo "$REPO" --remove-label in-progress --add-label failed
+    gh issue comment "$number" --repo "$REPO" --body "[solver] Failed: claude produced no commits."
+    git -C "$REPO_DIR" worktree remove "$wt_dir" --force || true
+    return
+  fi
+
+  # Push branch
+  echo "[solver] Pushing branch $branch"
+  git -C "$wt_dir" push -u origin "$branch"
+
+  # Create PR
+  local pr_url
+  pr_url=$(gh pr create --repo "$REPO" --head "$branch" --base "$base_branch" --title "$title" --body "$(cat <<PR_EOF
+Closes #$number
+
+Automated by gh-claudecode solver.
+PR_EOF
+)")
+
+  echo "[solver] PR created: $pr_url"
+
+  # Swap labels: in-progress -> done
+  gh issue edit "$number" --repo "$REPO" --remove-label in-progress --add-label done
+
+  # Comment with PR URL
+  gh issue comment "$number" --repo "$REPO" --body "[solver] PR created: $pr_url"
+
+  # Cleanup worktree
+  git -C "$REPO_DIR" worktree remove "$wt_dir" --force || true
+
+  echo "[solver] Issue #$number solved successfully"
+}
+
 # ---------------------------------------------------------------------------
 # Startup
 # ---------------------------------------------------------------------------
@@ -111,8 +283,12 @@ while true; do
   in_progress_count=$(echo "$in_progress" | jq 'length')
   echo "[solver] Found $in_progress_count in-progress issue(s)"
 
-  # TODO (Task 6): check for stale in-progress issues that exceeded SOLVER_TIMEOUT
-  # and mark them as failed
+  if [[ "$in_progress_count" -gt 0 ]]; then
+    echo "$in_progress" | jq -c '.[]' | while read -r issue; do
+      ip_number=$(echo "$issue" | jq -r '.number')
+      check_stale "$ip_number"
+    done
+  fi
 
   # --- Approved issues (pick first one, sequential) ---
   approved=$(get_approved_issues)
@@ -125,7 +301,7 @@ while true; do
     title=$(echo "$first" | jq -r '.title')
     echo "[solver] Next issue to solve: #$number — $title"
 
-    # TODO (Task 7): solve the issue (worktree, branch, claude, PR)
+    solve_issue "$number" "$title"
   fi
 
   echo "[solver] Sleeping ${SOLVER_INTERVAL}s..."
