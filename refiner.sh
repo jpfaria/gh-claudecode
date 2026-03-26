@@ -58,9 +58,17 @@ done
 echo "[refiner] Starting for $REPO (interval: ${REFINER_INTERVAL}s, model: $CLAUDE_MODEL)"
 
 # ---------------------------------------------------------------------------
-# Load project context from target repo (CLAUDE.md)
+# Load refiner skill + project context
 # ---------------------------------------------------------------------------
 
+# Load interview skill (how to talk to users)
+REFINER_SKILL=""
+if [[ -f "$SCRIPT_DIR/skills/refiner-interview.md" ]]; then
+  REFINER_SKILL=$(cat "$SCRIPT_DIR/skills/refiner-interview.md")
+  echo "[refiner] Loaded interview skill"
+fi
+
+# Load project context from target repo (CLAUDE.md)
 REPO_CONTEXT=""
 
 fetch_repo_file() {
@@ -129,11 +137,19 @@ start_refinement() {
 
   local prompt
   prompt=$(cat <<PROMPT
-You are a product manager who deeply understands the project **$REPO**. You know the codebase, the architecture, and the business domain. But right now you are talking to an END USER who does NOT know any of that.
+## Your Skill (how to behave)
+
+${REFINER_SKILL}
+
+## Project Context (what the project is about)
 
 ${REPO_CONTEXT}
 
 ---
+
+## Current Task
+
+This is a NEW issue that just arrived. Start the interview.
 
 Issue #$number: $title
 
@@ -141,17 +157,6 @@ Issue body:
 $body
 
 ---
-
-YOUR ROLE: Interview the user to understand what they need. Ask ONLY functional/UX questions — things a non-technical user can answer. NEVER ask about files, modules, code, architecture, or complexity.
-
-You need to understand these 4 items from the user:
-
-1. **Problem / objective** — what is happening (or not happening) and why it matters
-2. **Expected behavior** — what the user expects to see or experience instead
-3. **Type** — bug (something broken), feature (something new), or enhancement (improving existing)
-4. **Priority** — low (nice to have), medium (should fix soon), high (blocking work)
-
-Analyze the issue text and determine which items are already clear. For missing items, ask simple questions. Be concise, friendly, use markdown. Write in the same language as the issue.
 
 Reply ONLY with the comment text to be posted on the issue.
 PROMPT
@@ -212,11 +217,19 @@ continue_refinement() {
 
   local prompt
   prompt=$(cat <<PROMPT
-You are a product manager who deeply understands the project **$REPO**. You know the codebase, the architecture, and the business domain. But right now you are talking to an END USER who does NOT know any of that.
+## Your Skill (how to behave)
+
+${REFINER_SKILL}
+
+## Project Context (what the project is about)
 
 ${REPO_CONTEXT}
 
 ---
+
+## Current Task
+
+This is an ONGOING conversation. The user has replied. Continue the interview.
 
 Issue #$number: $title
 
@@ -228,24 +241,11 @@ $comments
 
 ---
 
-PHASE 1 — USER INTERVIEW (functional questions only):
+Check if the 4 functional items from your skill are clear from the conversation.
 
-Check if these 4 items are clear from the conversation:
+If ANY are still missing or unclear: reply with a follow-up question (following your skill rules).
 
-1. **Problem / objective** — what is happening (or not happening) and why it matters
-2. **Expected behavior** — what the user expects to see or experience instead
-3. **Type** — bug (something broken), feature (something new), or enhancement (improving existing)
-4. **Priority** — low (nice to have), medium (should fix soon), high (blocking work)
-
-If ANY of these 4 items are still missing or unclear, respond ONLY with a follow-up comment asking simple functional questions. NEVER ask about files, code, or architecture. Be concise, friendly. Write in the same language as the conversation.
-
----
-
-PHASE 2 — TECHNICAL ENRICHMENT (only if all 4 items above are clear):
-
-If ALL 4 functional items are clear, use YOUR knowledge of the project (from the context above) to fill the technical details yourself. The user does NOT need to answer these — you infer them.
-
-Respond with EXACTLY:
+If ALL 4 are clear: use your project knowledge to fill the technical section yourself, then respond with EXACTLY:
 
 CHECKLIST_COMPLETE
 ---
@@ -259,6 +259,8 @@ CHECKLIST_COMPLETE
 - [x] **Affected files / modules** — <your best inference from project knowledge>
 - [x] **Proposed approach** — <high-level solution based on project architecture>
 - [x] **Complexity estimate** — S / M / L / XL
+
+Reply ONLY with the comment text (if still interviewing) or the CHECKLIST_COMPLETE block (if done).
 PROMPT
   )
 
