@@ -58,7 +58,7 @@ done
 echo "[refiner] Starting for $REPO (interval: ${REFINER_INTERVAL}s, model: $CLAUDE_MODEL)"
 
 # ---------------------------------------------------------------------------
-# Load project context from target repo (CLAUDE.md, PRODUCT.md)
+# Load project context from target repo (CLAUDE.md)
 # ---------------------------------------------------------------------------
 
 REPO_CONTEXT=""
@@ -70,26 +70,15 @@ fetch_repo_file() {
 
 echo "[refiner] Loading project context from $REPO..."
 claude_md=$(fetch_repo_file "CLAUDE.md")
-product_md=$(fetch_repo_file "PRODUCT.md")
 
 if [[ -n "$claude_md" ]]; then
-  REPO_CONTEXT="${REPO_CONTEXT}
-
-## Project Technical Context (CLAUDE.md)
+  REPO_CONTEXT="## Project Context (CLAUDE.md)
 ${claude_md}"
   echo "[refiner] Loaded CLAUDE.md"
 fi
 
-if [[ -n "$product_md" ]]; then
-  REPO_CONTEXT="${REPO_CONTEXT}
-
-## Product Context (PRODUCT.md)
-${product_md}"
-  echo "[refiner] Loaded PRODUCT.md"
-fi
-
 if [[ -z "$REPO_CONTEXT" ]]; then
-  echo "[refiner] Warning: no CLAUDE.md or PRODUCT.md found in $REPO"
+  echo "[refiner] Warning: no CLAUDE.md found in $REPO"
 fi
 
 # ---------------------------------------------------------------------------
