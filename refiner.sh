@@ -82,17 +82,20 @@ ensure_labels() {
   echo "[refiner] All required labels verified"
 }
 
-# Return open issues with NO labels (new, unprocessed issues)
+# Get new issues: no board status and no workflow labels
 get_new_issues() {
-  local repo="$1"
-  gh issue list --repo "$repo" --state open --json number,title,labels \
-    | jq '[.[] | select(.labels | length == 0)]'
+  local skip_labels="refining ready approved in-progress done failed system"
+  gh issue list --repo "$REPO" --state open --json number,title,labels --limit 100 \
+    | jq --arg skip "$skip_labels" '
+      ($skip | split(" ")) as $skip_list |
+      [.[] | select(
+        (.labels | map(.name) | map(select(. as $l | $skip_list | index($l))) | length) == 0
+      ) | {number, title}]'
 }
 
-# Return open issues with label "refining"
+# Get issues being refined: board status = "Refining"
 get_refining_issues() {
-  local repo="$1"
-  gh issue list --repo "$repo" --state open --label "refining" --json number,title
+  get_issues_by_board_status "Refining"
 }
 
 # Perform initial refinement of a new issue using claude
@@ -138,8 +141,7 @@ PROMPT
 
   if [[ -n "$response" ]]; then
     echo "[refiner] Got response from claude, posting comment on #$number"
-    gh issue edit "$number" --repo "$REPO" --add-label "refining"
-    set_project_status "$number" "Refining"
+    set_issue_status "$number" "Refining" "refining"
     gh issue comment "$number" --repo "$REPO" --body "${REFINER_MARKER}
 ${response}"
     echo "[refiner] Issue #$number labeled 'refining' and comment posted"
@@ -254,8 +256,7 @@ PROMPT
 ${checklist}"
 
     gh issue edit "$number" --repo "$REPO" --body "$new_body"
-    gh issue edit "$number" --repo "$REPO" --remove-label "refining" --add-label "ready"
-    set_project_status "$number" "Ready"
+    set_issue_status "$number" "Ready" "ready" "refining"
     gh issue comment "$number" --repo "$REPO" --body "${REFINER_MARKER}
 Refinement complete. All checklist items have been filled. This issue is now **ready** for development."
     echo "[refiner] Issue #$number is now ready"
@@ -282,7 +283,7 @@ while true; do
   echo "[refiner] Polling at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
   # --- New issues (no labels) ---
-  new_issues=$(get_new_issues "$REPO")
+  new_issues=$(get_new_issues)
   new_count=$(echo "$new_issues" | jq 'length')
   echo "[refiner] Found $new_count new issue(s)"
 
@@ -293,7 +294,7 @@ while true; do
   done
 
   # --- Refining issues ---
-  refining_issues=$(get_refining_issues "$REPO")
+  refining_issues=$(get_refining_issues)
   refining_count=$(echo "$refining_issues" | jq 'length')
   echo "[refiner] Found $refining_count refining issue(s)"
 

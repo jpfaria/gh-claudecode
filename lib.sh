@@ -177,3 +177,65 @@ set_project_status() {
 
   echo "[lib] Issue #$issue_number → $status_name"
 }
+
+# Get issues from the Project Board by status name
+# Usage: get_issues_by_board_status "Refining"
+# Returns JSON array: [{"number": 1, "title": "...", "item_id": "..."}]
+get_issues_by_board_status() {
+  local target_status="$1"
+  local owner="${REPO%%/*}"
+  local project_number="${PROJECT_NUMBER:-1}"
+
+  if [[ -z "$PROJECT_ID" ]]; then
+    echo "[]"
+    return
+  fi
+
+  gh api graphql -f query="
+  {
+    user(login: \"$owner\") {
+      projectV2(number: $project_number) {
+        items(first: 100) {
+          nodes {
+            id
+            fieldValueByName(name: \"Status\") {
+              ... on ProjectV2ItemFieldSingleSelectValue {
+                name
+              }
+            }
+            content {
+              ... on Issue {
+                number
+                title
+                state
+              }
+            }
+          }
+        }
+      }
+    }
+  }" 2>/dev/null | jq --arg status "$target_status" '
+    [.data.user.projectV2.items.nodes[]
+     | select(.fieldValueByName.name == $status)
+     | select(.content.state == "OPEN")
+     | {number: .content.number, title: .content.title, item_id: .id}]'
+}
+
+# Set both board status AND label in one call
+# Usage: set_issue_status <issue_number> <status_name> <label_name>
+set_issue_status() {
+  local issue_number="$1"
+  local board_status="$2"
+  local label="$3"
+  local old_label="${4:-}"
+
+  # Update board
+  set_project_status "$issue_number" "$board_status"
+
+  # Update labels
+  if [[ -n "$old_label" ]]; then
+    gh issue edit "$issue_number" --repo "$REPO" --remove-label "$old_label" --add-label "$label" 2>/dev/null || true
+  else
+    gh issue edit "$issue_number" --repo "$REPO" --add-label "$label" 2>/dev/null || true
+  fi
+}
