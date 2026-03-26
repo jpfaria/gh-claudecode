@@ -4,14 +4,14 @@
 # Target GitHub repository (owner/repo)
 REPO="jpfaria/OpenRig"
 
-# GitHub Project number
-PROJECT_NUMBER=1
-
 # Refiner polling interval in seconds (default: 300)
 REFINER_INTERVAL=300
 
 # Solver polling interval in seconds (default: 600)
 SOLVER_INTERVAL=600
+
+# Max time in seconds for in-progress before marking as failed (default: 3600)
+SOLVER_TIMEOUT=3600
 
 # Claude model to use (default: claude-sonnet-4-6)
 CLAUDE_MODEL="claude-sonnet-4-6"
