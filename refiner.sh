@@ -97,7 +97,7 @@ fi
 ensure_labels() {
   local repo="$1"
   local label color
-  local pairs="refining:fbca04 ready:0e8a16 approved:1d76db in-progress:d93f0b done:0e8a16 failed:b60205"
+  local pairs="refining:fbca04 ready:0e8a16 approved:1d76db in-progress:d93f0b done:0e8a16 failed:b60205 system:c5def5"
   local existing
   existing=$(gh label list --repo "$repo" --json name -q ".[].name")
 
@@ -112,11 +112,18 @@ ensure_labels() {
   echo "[refiner] All required labels verified"
 }
 
-# Return open issues with NO labels (new, unprocessed issues)
+# Labels that the refiner should ignore (issue already handled or system-generated)
+SKIP_LABELS="refining ready approved in-progress done failed system"
+
+# Return open issues that have NO workflow/system labels (candidates for refinement)
 get_new_issues() {
   local repo="$1"
   gh issue list --repo "$repo" --state open --json number,title,labels \
-    | jq '[.[] | select(.labels | length == 0)]'
+    | jq --arg skip "$SKIP_LABELS" '
+        ($skip | split(" ")) as $skip_list |
+        [.[] | select(
+          (.labels | map(.name) | map(select(. as $l | $skip_list | index($l))) | length) == 0
+        )]'
 }
 
 # Return open issues with label "refining"
