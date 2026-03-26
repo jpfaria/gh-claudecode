@@ -88,6 +88,55 @@ get_refining_issues() {
   gh issue list --repo "$repo" --state open --label "refining" --json number,title
 }
 
+# Perform initial refinement of a new issue using claude
+start_refinement() {
+  local number="$1"
+  local title="$2"
+
+  echo "[refiner] Starting refinement for issue #$number: $title"
+
+  local body
+  body=$(gh issue view "$number" --repo "$REPO" --json body -q '.body')
+
+  local prompt
+  prompt=$(cat <<PROMPT
+You are a technical project manager analyzing a GitHub issue.
+
+Issue #$number: $title
+
+Issue body:
+$body
+
+---
+
+Every issue must have the following checklist completed before development:
+
+1. **Problem / objective described** — clear explanation of what and why
+2. **Proposed solution** — high-level approach or architecture
+3. **Affected files / modules** — which parts of the codebase are impacted
+4. **Acceptance criteria** — concrete conditions to consider this done
+5. **Type** — bug, feature, enhancement, refactor, docs, or chore
+6. **Complexity estimate** — S, M, L, or XL
+
+Analyze the issue text and determine which checklist items can already be filled from the existing content. For items that are missing or unclear, ask specific questions to the issue author.
+
+Reply ONLY with the comment text to be posted on the issue. Be concise, use markdown formatting, and start with a greeting to the author.
+PROMPT
+  )
+
+  local response
+  response=$(echo "$prompt" | claude --model "$CLAUDE_MODEL" -p 2>&1) || true
+
+  if [[ -n "$response" ]]; then
+    echo "[refiner] Got response from claude, posting comment on #$number"
+    gh issue edit "$number" --repo "$REPO" --add-label "refining"
+    gh issue comment "$number" --repo "$REPO" --body "$response"
+    echo "[refiner] Issue #$number labeled 'refining' and comment posted"
+  else
+    echo "[refiner] Error: empty response from claude for issue #$number" >&2
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Startup
 # ---------------------------------------------------------------------------
@@ -110,7 +159,7 @@ while true; do
   echo "$new_issues" | jq -c '.[]' | while read -r item; do
     number=$(echo "$item" | jq -r '.number')
     title=$(echo "$item" | jq -r '.title')
-    echo "[refiner] Processing new issue #$number: $title"
+    start_refinement "$number" "$title"
   done
 
   # --- Refining issues ---
