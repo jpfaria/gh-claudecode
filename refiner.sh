@@ -137,6 +137,122 @@ PROMPT
   fi
 }
 
+# Check if the last comment on an issue was made by a human (not us or a bot)
+# Returns 0 (true) if human, 1 (false) if bot/ourselves
+last_comment_is_human() {
+  local number="$1"
+  local my_login
+  my_login=$(gh api user -q '.login')
+
+  local last_author
+  last_author=$(gh issue view "$number" --repo "$REPO" --json comments \
+    -q '.comments[-1].author.login // empty')
+
+  # No comments yet — treat as human (the body itself is from human)
+  if [[ -z "$last_author" ]]; then
+    return 0
+  fi
+
+  # If last comment is from us, a [bot], or github-actions → not human
+  if [[ "$last_author" == "$my_login" ]] \
+    || [[ "$last_author" == *"[bot]"* ]] \
+    || [[ "$last_author" == "github-actions" ]]; then
+    return 1
+  fi
+
+  return 0
+}
+
+# Continue refinement of an issue: either complete the checklist or ask more questions
+continue_refinement() {
+  local number="$1"
+
+  echo "[refiner] Continuing refinement for issue #$number"
+
+  local issue_json
+  issue_json=$(gh issue view "$number" --repo "$REPO" --json title,body,comments)
+
+  local title body comments
+  title=$(echo "$issue_json" | jq -r '.title')
+  body=$(echo "$issue_json" | jq -r '.body')
+  comments=$(echo "$issue_json" | jq -r '[.comments[-20:][].body] | join("\n\n---\n\n")')
+
+  local prompt
+  prompt=$(cat <<PROMPT
+You are a technical project manager refining a GitHub issue through conversation.
+
+Issue #$number: $title
+
+Issue body:
+$body
+
+Recent comments:
+$comments
+
+---
+
+The following 6 checklist items are MANDATORY before this issue can move to development:
+
+1. **Problem / objective described** — clear explanation of what and why
+2. **Proposed solution** — high-level approach or architecture
+3. **Affected files / modules** — which parts of the codebase are impacted
+4. **Acceptance criteria** — concrete conditions to consider this done
+5. **Type** — bug, feature, enhancement, refactor, docs, or chore
+6. **Complexity estimate** — S, M, L, or XL
+
+Analyze ALL content above (body + comments). If ALL 6 items can be confidently filled from the existing information, respond with EXACTLY:
+
+CHECKLIST_COMPLETE
+---
+- [x] **Problem / objective described** — <filled summary>
+- [x] **Proposed solution** — <filled summary>
+- [x] **Affected files / modules** — <filled summary>
+- [x] **Acceptance criteria** — <filled summary>
+- [x] **Type** — <filled value>
+- [x] **Complexity estimate** — <filled value>
+
+If ANY items are still missing or unclear, respond ONLY with a follow-up comment asking specific questions to gather the missing information. Be concise and use markdown.
+PROMPT
+  )
+
+  local response
+  response=$(echo "$prompt" | claude --model "$CLAUDE_MODEL" -p 2>&1) || true
+
+  if [[ -z "$response" ]]; then
+    echo "[refiner] Error: empty response from claude for issue #$number" >&2
+    return
+  fi
+
+  local first_line
+  first_line=$(echo "$response" | head -n1)
+
+  if [[ "$first_line" == "CHECKLIST_COMPLETE" ]]; then
+    echo "[refiner] Checklist complete for issue #$number, transitioning to ready"
+
+    # Extract checklist (everything after the first ---)
+    local checklist
+    checklist=$(echo "$response" | sed '1,/^---$/d')
+
+    # Append checklist to issue body
+    local new_body
+    new_body="${body}
+
+---
+
+## Refinement Checklist
+
+${checklist}"
+
+    gh issue edit "$number" --repo "$REPO" --body "$new_body"
+    gh issue edit "$number" --repo "$REPO" --remove-label "refining" --add-label "ready"
+    gh issue comment "$number" --repo "$REPO" --body "Refinement complete. All checklist items have been filled. This issue is now **ready** for development."
+    echo "[refiner] Issue #$number is now ready"
+  else
+    echo "[refiner] Posting follow-up questions on issue #$number"
+    gh issue comment "$number" --repo "$REPO" --body "$response"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Startup
 # ---------------------------------------------------------------------------
@@ -169,7 +285,11 @@ while true; do
 
   echo "$refining_issues" | jq -c '.[]' | while read -r item; do
     number=$(echo "$item" | jq -r '.number')
-    echo "[refiner] Checking issue #$number for human response"
+    if last_comment_is_human "$number"; then
+      continue_refinement "$number"
+    else
+      echo "[refiner] Skipping #$number — waiting for human response"
+    fi
   done
 
   echo "[refiner] Sleeping ${REFINER_INTERVAL}s..."
