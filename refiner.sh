@@ -41,6 +41,11 @@ if [[ -z "$REPO" ]]; then
   exit 1
 fi
 
+# Normalize REPO to owner/repo format
+REPO="${REPO#git@github.com:}"
+REPO="${REPO#https://github.com/}"
+REPO="${REPO%.git}"
+
 # Check dependencies
 for cmd in gh claude jq; do
   if ! command -v "$cmd" &>/dev/null; then
@@ -100,7 +105,9 @@ start_refinement() {
 
   local prompt
   prompt=$(cat <<PROMPT
-You are a technical project manager analyzing a GitHub issue.
+You are a technical project manager analyzing a GitHub issue from the repository **$REPO**.
+
+IMPORTANT: This issue is about the $REPO project, NOT about the tool posting this comment. Analyze and respond in the context of that repository.
 
 Issue #$number: $title
 
@@ -179,7 +186,9 @@ continue_refinement() {
 
   local prompt
   prompt=$(cat <<PROMPT
-You are a technical project manager refining a GitHub issue through conversation.
+You are a technical project manager refining a GitHub issue from the repository **$REPO**.
+
+IMPORTANT: This issue is about the $REPO project, NOT about the tool posting this comment. Analyze and respond in the context of that repository.
 
 Issue #$number: $title
 

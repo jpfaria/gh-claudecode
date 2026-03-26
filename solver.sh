@@ -47,6 +47,11 @@ if [[ -z "$REPO" ]]; then
   exit 1
 fi
 
+# Normalize REPO to owner/repo format
+REPO="${REPO#git@github.com:}"
+REPO="${REPO#https://github.com/}"
+REPO="${REPO%.git}"
+
 # Check dependencies
 for cmd in gh claude jq git; do
   if ! command -v "$cmd" &>/dev/null; then
