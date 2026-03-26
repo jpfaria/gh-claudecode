@@ -8,6 +8,10 @@ if [[ -f "$SCRIPT_DIR/.env" ]]; then
   source "$SCRIPT_DIR/.env"
 fi
 
+# Load shared library
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib.sh"
+
 # Default values
 REPO="${REPO:-}"
 REFINER_INTERVAL="${REFINER_INTERVAL:-300}"
@@ -42,9 +46,7 @@ if [[ -z "$REPO" ]]; then
 fi
 
 # Normalize REPO to owner/repo format
-REPO="${REPO#git@github.com:}"
-REPO="${REPO#https://github.com/}"
-REPO="${REPO%.git}"
+REPO=$(normalize_repo "$REPO")
 
 # Check dependencies
 for cmd in gh claude jq; do
@@ -137,6 +139,7 @@ PROMPT
   if [[ -n "$response" ]]; then
     echo "[refiner] Got response from claude, posting comment on #$number"
     gh issue edit "$number" --repo "$REPO" --add-label "refining"
+    set_project_status "$number" "Refining"
     gh issue comment "$number" --repo "$REPO" --body "${REFINER_MARKER}
 ${response}"
     echo "[refiner] Issue #$number labeled 'refining' and comment posted"
@@ -252,6 +255,7 @@ ${checklist}"
 
     gh issue edit "$number" --repo "$REPO" --body "$new_body"
     gh issue edit "$number" --repo "$REPO" --remove-label "refining" --add-label "ready"
+    set_project_status "$number" "Ready"
     gh issue comment "$number" --repo "$REPO" --body "${REFINER_MARKER}
 Refinement complete. All checklist items have been filled. This issue is now **ready** for development."
     echo "[refiner] Issue #$number is now ready"
@@ -267,6 +271,7 @@ ${response}"
 # ---------------------------------------------------------------------------
 
 ensure_labels "$REPO"
+init_project_board || true
 
 # ---------------------------------------------------------------------------
 # Main polling loop

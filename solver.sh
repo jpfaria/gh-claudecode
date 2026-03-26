@@ -8,6 +8,10 @@ if [[ -f "$SCRIPT_DIR/.env" ]]; then
   source "$SCRIPT_DIR/.env"
 fi
 
+# Load shared library
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib.sh"
+
 # Default values
 REPO="${REPO:-}"
 SOLVER_INTERVAL="${SOLVER_INTERVAL:-600}"
@@ -48,9 +52,7 @@ if [[ -z "$REPO" ]]; then
 fi
 
 # Normalize REPO to owner/repo format
-REPO="${REPO#git@github.com:}"
-REPO="${REPO#https://github.com/}"
-REPO="${REPO%.git}"
+REPO=$(normalize_repo "$REPO")
 
 # Check dependencies
 for cmd in gh claude jq git; do
@@ -109,6 +111,7 @@ check_stale() {
   if [[ -z "$comments" || "$comments" == "null" ]]; then
     echo "[solver] No '[solver] Started at' comment found for #$number — marking as failed"
     gh issue edit "$number" --repo "$REPO" --remove-label in-progress --add-label failed
+    set_project_status "$number" "Failed"
     gh issue comment "$number" --repo "$REPO" --body "[solver] Marked as failed: no start timestamp found."
     return
   fi
@@ -138,6 +141,7 @@ check_stale() {
     fi
 
     gh issue edit "$number" --repo "$REPO" --remove-label in-progress --add-label failed
+    set_project_status "$number" "Failed"
     gh issue comment "$number" --repo "$REPO" --body "[solver] Marked as failed: timed out after ${elapsed}s (limit: ${SOLVER_TIMEOUT}s)."
   else
     echo "[solver] Issue #$number still within timeout (${elapsed}s / ${SOLVER_TIMEOUT}s)"
@@ -152,6 +156,7 @@ solve_issue() {
 
   # Swap labels: approved -> in-progress
   gh issue edit "$number" --repo "$REPO" --remove-label approved --add-label in-progress
+  set_project_status "$number" "In Progress"
 
   # Comment with start timestamp
   local start_ts
@@ -225,6 +230,7 @@ PROMPT_EOF
   if [[ "$claude_exit" -ne 0 ]]; then
     echo "[solver] Claude failed with exit code $claude_exit for #$number"
     gh issue edit "$number" --repo "$REPO" --remove-label in-progress --add-label failed
+    set_project_status "$number" "Failed"
     gh issue comment "$number" --repo "$REPO" --body "[solver] Failed: claude exited with code $claude_exit."
     git -C "$REPO_DIR" worktree remove "$wt_dir" --force || true
     return
@@ -237,6 +243,7 @@ PROMPT_EOF
   if [[ "$commit_count" -eq 0 ]]; then
     echo "[solver] No commits made for #$number — marking as failed"
     gh issue edit "$number" --repo "$REPO" --remove-label in-progress --add-label failed
+    set_project_status "$number" "Failed"
     gh issue comment "$number" --repo "$REPO" --body "[solver] Failed: claude produced no commits."
     git -C "$REPO_DIR" worktree remove "$wt_dir" --force || true
     return
@@ -259,6 +266,7 @@ PR_EOF
 
   # Swap labels: in-progress -> done
   gh issue edit "$number" --repo "$REPO" --remove-label in-progress --add-label done
+  set_project_status "$number" "Done"
 
   # Comment with PR URL
   gh issue comment "$number" --repo "$REPO" --body "[solver] PR created: $pr_url"
@@ -274,6 +282,8 @@ PR_EOF
 # ---------------------------------------------------------------------------
 
 echo "[solver] Starting for $REPO (interval: ${SOLVER_INTERVAL}s, timeout: ${SOLVER_TIMEOUT}s, model: $CLAUDE_MODEL)"
+
+init_project_board || true
 
 # ---------------------------------------------------------------------------
 # Main polling loop
