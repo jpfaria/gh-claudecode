@@ -92,11 +92,11 @@ fi
 # ---------------------------------------------------------------------------
 
 get_approved_issues() {
-  gh issue list --repo "$REPO" --state open --label approved --json number,title
+  get_issues_by_board_status "Approved"
 }
 
 get_in_progress_issues() {
-  gh issue list --repo "$REPO" --state open --label in-progress --json number,title
+  get_issues_by_board_status "In Progress"
 }
 
 check_stale() {
@@ -110,8 +110,7 @@ check_stale() {
 
   if [[ -z "$comments" || "$comments" == "null" ]]; then
     echo "[solver] No '[solver] Started at' comment found for #$number — marking as failed"
-    gh issue edit "$number" --repo "$REPO" --remove-label in-progress --add-label failed
-    set_project_status "$number" "Failed"
+    set_issue_status "$number" "Failed" "failed" "in-progress"
     gh issue comment "$number" --repo "$REPO" --body "[solver] Marked as failed: no start timestamp found."
     return
   fi
@@ -140,8 +139,7 @@ check_stale() {
       git -C "$REPO_DIR" worktree remove "$WORKTREE_DIR/issue-$number" --force || true
     fi
 
-    gh issue edit "$number" --repo "$REPO" --remove-label in-progress --add-label failed
-    set_project_status "$number" "Failed"
+    set_issue_status "$number" "Failed" "failed" "in-progress"
     gh issue comment "$number" --repo "$REPO" --body "[solver] Marked as failed: timed out after ${elapsed}s (limit: ${SOLVER_TIMEOUT}s)."
   else
     echo "[solver] Issue #$number still within timeout (${elapsed}s / ${SOLVER_TIMEOUT}s)"
@@ -154,9 +152,8 @@ solve_issue() {
 
   echo "[solver] Solving issue #$number — $title"
 
-  # Swap labels: approved -> in-progress
-  gh issue edit "$number" --repo "$REPO" --remove-label approved --add-label in-progress
-  set_project_status "$number" "In Progress"
+  # Swap status: approved -> in-progress
+  set_issue_status "$number" "In Progress" "in-progress" "approved"
 
   # Comment with start timestamp
   local start_ts
@@ -229,8 +226,7 @@ PROMPT_EOF
 
   if [[ "$claude_exit" -ne 0 ]]; then
     echo "[solver] Claude failed with exit code $claude_exit for #$number"
-    gh issue edit "$number" --repo "$REPO" --remove-label in-progress --add-label failed
-    set_project_status "$number" "Failed"
+    set_issue_status "$number" "Failed" "failed" "in-progress"
     gh issue comment "$number" --repo "$REPO" --body "[solver] Failed: claude exited with code $claude_exit."
     git -C "$REPO_DIR" worktree remove "$wt_dir" --force || true
     return
@@ -242,8 +238,7 @@ PROMPT_EOF
 
   if [[ "$commit_count" -eq 0 ]]; then
     echo "[solver] No commits made for #$number — marking as failed"
-    gh issue edit "$number" --repo "$REPO" --remove-label in-progress --add-label failed
-    set_project_status "$number" "Failed"
+    set_issue_status "$number" "Failed" "failed" "in-progress"
     gh issue comment "$number" --repo "$REPO" --body "[solver] Failed: claude produced no commits."
     git -C "$REPO_DIR" worktree remove "$wt_dir" --force || true
     return
@@ -264,9 +259,8 @@ PR_EOF
 
   echo "[solver] PR created: $pr_url"
 
-  # Swap labels: in-progress -> done
-  gh issue edit "$number" --repo "$REPO" --remove-label in-progress --add-label done
-  set_project_status "$number" "Done"
+  # Swap status: in-progress -> done
+  set_issue_status "$number" "Done" "done" "in-progress"
 
   # Comment with PR URL
   gh issue comment "$number" --repo "$REPO" --body "[solver] PR created: $pr_url"
