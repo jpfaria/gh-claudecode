@@ -191,7 +191,8 @@ get_issues_by_board_status() {
     return
   fi
 
-  gh api graphql -f query="
+  local raw
+  raw=$(gh api graphql -f query="
   {
     user(login: \"$owner\") {
       projectV2(number: $project_number) {
@@ -214,7 +215,15 @@ get_issues_by_board_status() {
         }
       }
     }
-  }" 2>/dev/null | jq --arg status "$target_status" '
+  }" 2>&1) || true
+
+  if ! echo "$raw" | jq empty 2>/dev/null; then
+    echo "[lib] Warning: GraphQL error in get_issues_by_board_status: $(echo "$raw" | head -1)" >&2
+    echo "[]"
+    return
+  fi
+
+  echo "$raw" | jq --arg status "$target_status" '
     [.data.user.projectV2.items.nodes[]
      | select(.fieldValueByName.name == $status)
      | select(.content.state == "OPEN")
@@ -235,7 +244,8 @@ get_issues_by_board_status_with_comments() {
     return
   fi
 
-  gh api graphql -f query="
+  local raw
+  raw=$(gh api graphql -f query="
   {
     user(login: \"$owner\") {
       projectV2(number: $project_number) {
@@ -264,7 +274,15 @@ get_issues_by_board_status_with_comments() {
         }
       }
     }
-  }" 2>/dev/null | jq --arg status "$target_status" '
+  }" 2>&1) || true
+
+  if ! echo "$raw" | jq empty 2>/dev/null; then
+    echo "[lib] Warning: GraphQL error in get_issues_by_board_status_with_comments: $(echo "$raw" | head -1)" >&2
+    echo "[]"
+    return
+  fi
+
+  echo "$raw" | jq --arg status "$target_status" '
     [.data.user.projectV2.items.nodes[]
      | select(.fieldValueByName.name == $status)
      | select(.content.state == "OPEN")
