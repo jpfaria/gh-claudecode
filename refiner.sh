@@ -15,6 +15,7 @@ source "$SCRIPT_DIR/lib.sh"
 # Default values
 REPO="${REPO:-}"
 REFINER_INTERVAL="${REFINER_INTERVAL:-300}"
+REFINER_PARALLEL="${REFINER_PARALLEL:-5}"
 CLAUDE_MODEL="${CLAUDE_MODEL:-claude-sonnet-4-6}"
 
 # Parse CLI args
@@ -30,6 +31,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --model)
       CLAUDE_MODEL="$2"
+      shift 2
+      ;;
+    --parallel)
+      REFINER_PARALLEL="$2"
       shift 2
       ;;
     *)
@@ -57,7 +62,7 @@ for cmd in gh claude jq; do
 done
 
 # Print startup message
-echo "[refiner] Starting for $REPO (interval: ${REFINER_INTERVAL}s, model: $CLAUDE_MODEL)"
+echo "[refiner] Starting for $REPO (interval: ${REFINER_INTERVAL}s, parallel: ${REFINER_PARALLEL}, model: $CLAUDE_MODEL)"
 
 # ---------------------------------------------------------------------------
 # Load refiner skill + project context
@@ -315,25 +320,39 @@ while true; do
   new_count=$(echo "$new_issues" | jq 'length')
   echo "[refiner] Found $new_count new issue(s)"
 
+  running=0
   echo "$new_issues" | jq -c '.[]' | while read -r item; do
     number=$(echo "$item" | jq -r '.number')
     title=$(echo "$item" | jq -r '.title')
-    start_refinement "$number" "$title"
+    start_refinement "$number" "$title" &
+    running=$((running + 1))
+    if [[ "$running" -ge "$REFINER_PARALLEL" ]]; then
+      wait -n 2>/dev/null || wait
+      running=$((running - 1))
+    fi
   done
+  wait
 
   # --- Refining issues ---
   refining_issues=$(get_refining_issues)
   refining_count=$(echo "$refining_issues" | jq 'length')
   echo "[refiner] Found $refining_count refining issue(s)"
 
+  running=0
   echo "$refining_issues" | jq -c '.[]' | while read -r item; do
     number=$(echo "$item" | jq -r '.number')
     if last_comment_is_human "$number"; then
-      continue_refinement "$number"
+      continue_refinement "$number" &
+      running=$((running + 1))
+      if [[ "$running" -ge "$REFINER_PARALLEL" ]]; then
+        wait -n 2>/dev/null || wait
+        running=$((running - 1))
+      fi
     else
       echo "[refiner] Skipping #$number — waiting for human response"
     fi
   done
+  wait
 
   echo "[refiner] Sleeping ${REFINER_INTERVAL}s..."
   sleep "$REFINER_INTERVAL"
