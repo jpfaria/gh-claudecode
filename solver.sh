@@ -92,38 +92,42 @@ fi
 # ---------------------------------------------------------------------------
 
 get_approved_issues() {
-  get_issues_by_board_status "Approved"
+  get_issues_by_board_status_with_comments "Approved"
 }
 
 get_in_progress_issues() {
-  get_issues_by_board_status "In Progress"
+  get_issues_by_board_status_with_comments "In Progress"
 }
 
+# Check stale using pre-fetched comments (no extra API calls)
+# Args: number comments_json
 check_stale() {
   local number="$1"
+  local comments_json="$2"
 
   echo "[solver] Checking stale for issue #$number"
 
-  # Get the last comment starting with "[solver] Started at"
-  local comments
-  comments=$(gh issue view "$number" --repo "$REPO" --json comments --jq '.comments | map(select(.body | startswith("[solver] Started at"))) | last')
+  # Find "[solver] Started at" comment from pre-fetched data
+  local start_comment
+  start_comment=$(echo "$comments_json" | jq -r '[.[] | select(startswith("[solver] Started at"))] | last // empty')
 
-  if [[ -z "$comments" || "$comments" == "null" ]]; then
+  if [[ -z "$start_comment" ]]; then
     echo "[solver] No '[solver] Started at' comment found for #$number — marking as failed"
     set_issue_status "$number" "Failed" "failed" "in-progress"
     gh issue comment "$number" --repo "$REPO" --body "[solver] Marked as failed: no start timestamp found."
     return
   fi
 
-  local created_at
-  created_at=$(gh issue view "$number" --repo "$REPO" --json comments --jq '[.comments[] | select(.body | startswith("[solver] Started at"))] | last | .createdAt')
+  # Extract timestamp from comment text: "[solver] Started at 2026-03-26T21:00:00Z"
+  local start_time
+  start_time=$(echo "$start_comment" | sed 's/\[solver\] Started at //')
 
   # Parse timestamp (macOS vs Linux)
   local started_epoch
-  if started_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$created_at" "+%s" 2>/dev/null); then
+  if started_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$start_time" "+%s" 2>/dev/null); then
     : # macOS succeeded
   else
-    started_epoch=$(date -d "$created_at" "+%s")
+    started_epoch=$(date -d "$start_time" "+%s")
   fi
 
   local now_epoch
@@ -146,9 +150,12 @@ check_stale() {
   fi
 }
 
+# Args: number title body comments_json
 solve_issue() {
   local number="$1"
   local title="$2"
+  local issue_body="$3"
+  local comments_json="$4"
 
   echo "[solver] Solving issue #$number — $title"
 
@@ -160,11 +167,9 @@ solve_issue() {
   start_ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
   gh issue comment "$number" --repo "$REPO" --body "[solver] Started at $start_ts"
 
-  # Fetch issue body and comments
-  local issue_body
-  issue_body=$(gh issue view "$number" --repo "$REPO" --json body --jq '.body')
+  # Format comments for prompt
   local issue_comments
-  issue_comments=$(gh issue view "$number" --repo "$REPO" --json comments --jq '[.comments[].body] | join("\n---\n")')
+  issue_comments=$(echo "$comments_json" | jq -r 'join("\n---\n")')
 
   # Determine branch type from checklist
   local branch_type="feature"
@@ -295,7 +300,8 @@ while true; do
   if [[ "$in_progress_count" -gt 0 ]]; then
     echo "$in_progress" | jq -c '.[]' | while read -r issue; do
       ip_number=$(echo "$issue" | jq -r '.number')
-      check_stale "$ip_number"
+      ip_comments=$(echo "$issue" | jq -c '.comments')
+      check_stale "$ip_number" "$ip_comments"
     done
   fi
 
@@ -308,9 +314,11 @@ while true; do
     first=$(echo "$approved" | jq -c '.[0]')
     number=$(echo "$first" | jq -r '.number')
     title=$(echo "$first" | jq -r '.title')
+    body=$(echo "$first" | jq -r '.body')
+    comments_json=$(echo "$first" | jq -c '.comments')
     echo "[solver] Next issue to solve: #$number — $title"
 
-    solve_issue "$number" "$title"
+    solve_issue "$number" "$title" "$body" "$comments_json"
   fi
 
   echo "[solver] Sleeping ${SOLVER_INTERVAL}s..."
