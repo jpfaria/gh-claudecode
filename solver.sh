@@ -305,26 +305,27 @@ $issue_comments
 PROMPT_EOF
 )
 
-  # Run claude with stream-json for real-time logging
+  # Run claude with stream-json — output direct to file (unbuffered, one JSON line per event)
   echo "[solver] Running claude on worktree $wt_dir" >> "$issue_log"
   local claude_exit=0
 
-  (cd "$wt_dir" && echo "$prompt" | claude --model "$CLAUDE_MODEL" --output-format stream-json --verbose -p 2>&1) | while IFS= read -r line; do
-    # Log every line (raw JSON)
-    echo "$line" >> "$issue_log"
-    # Show assistant messages and results on terminal
-    local msg_text
-    msg_text=$(echo "$line" | jq -r 'select(.type == "assistant") | .message.content[]?.text // empty' 2>/dev/null)
-    if [[ -n "$msg_text" ]]; then
-      echo "$msg_text"
-    fi
-    local result_text
-    result_text=$(echo "$line" | jq -r 'select(.type == "result") | .result // empty' 2>/dev/null)
-    if [[ -n "$result_text" ]]; then
-      echo "[solver] Claude result: $result_text"
-    fi
-  done
-  claude_exit=${PIPESTATUS[0]:-$?}
+  # Show log in real-time on terminal
+  tail -f "$issue_log" 2>/dev/null | grep --line-buffered -o '"result":"[^"]*"' &
+  local tail_pid=$!
+
+  # Claude writes directly to log file — no pipe buffering
+  cd "$wt_dir" && echo "$prompt" | claude --model "$CLAUDE_MODEL" --output-format stream-json --verbose -p >> "$issue_log" 2>&1 || claude_exit=$?
+  cd "$SCRIPT_DIR"
+
+  kill "$tail_pid" 2>/dev/null || true
+  wait "$tail_pid" 2>/dev/null || true
+
+  # Extract final result for display
+  local final_result
+  final_result=$(grep '"type":"result"' "$issue_log" | tail -1 | jq -r '.result // empty' 2>/dev/null)
+  if [[ -n "$final_result" ]]; then
+    echo "[solver] Claude done: $(echo "$final_result" | head -3)"
+  fi
 
   if [[ "$claude_exit" -ne 0 ]]; then
     echo "[solver] Claude failed with exit code $claude_exit for #$number" | tee -a "$issue_log"
@@ -522,16 +523,8 @@ RETRY_EOF
         : > "$claude_log"
         local claude_exit=0
 
-        (cd "$wt_dir" && echo "$retry_prompt" | claude --model "$CLAUDE_MODEL" --output-format stream-json --verbose -p 2>&1) | while IFS= read -r line; do
-          echo "$line" >> "$claude_log"
-          local msg_text
-          msg_text=$(echo "$line" | jq -r 'select(.type == "assistant") | .message.content[]?.text // empty' 2>/dev/null)
-          if [[ -n "$msg_text" ]]; then echo "$msg_text"; fi
-          local result_text
-          result_text=$(echo "$line" | jq -r 'select(.type == "result") | .result // empty' 2>/dev/null)
-          if [[ -n "$result_text" ]]; then echo "[solver] Retry result: $result_text"; fi
-        done
-        claude_exit=${PIPESTATUS[0]:-$?}
+        cd "$wt_dir" && echo "$retry_prompt" | claude --model "$CLAUDE_MODEL" --output-format stream-json --verbose -p >> "$claude_log" 2>&1 || claude_exit=$?
+        cd "$SCRIPT_DIR"
 
         local gist_url=""
         if [[ -f "$claude_log" ]]; then
