@@ -305,10 +305,20 @@ $issue_comments
 PROMPT_EOF
 )
 
-  # Run claude — append output to issue log
-  echo "[solver] Running claude on worktree $wt_dir" | tee -a "$issue_log"
+  # Run claude — output goes to log file, displayed via tail
+  echo "[solver] Running claude on worktree $wt_dir" >> "$issue_log"
   local claude_exit=0
-  (cd "$wt_dir" && echo "$prompt" | claude --model "$CLAUDE_MODEL" -p 2>&1 | tee -a "$issue_log") || claude_exit=$?
+
+  # Start tail in background to show output in real-time
+  tail -f "$issue_log" 2>/dev/null &
+  local tail_pid=$!
+
+  # Run claude, redirect ALL output to log file
+  (cd "$wt_dir" && echo "$prompt" | claude --model "$CLAUDE_MODEL" -p >> "$issue_log" 2>&1) || claude_exit=$?
+
+  # Stop tail
+  kill "$tail_pid" 2>/dev/null || true
+  wait "$tail_pid" 2>/dev/null || true
 
   if [[ "$claude_exit" -ne 0 ]]; then
     echo "[solver] Claude failed with exit code $claude_exit for #$number" | tee -a "$issue_log"
@@ -503,8 +513,14 @@ RETRY_EOF
 )
 
         local claude_log="$LOG_DIR/issue-${number}.log"
+        : > "$claude_log"
         local claude_exit=0
-        (cd "$wt_dir" && echo "$retry_prompt" | claude --model "$CLAUDE_MODEL" -p 2>&1 | tee "$claude_log") || claude_exit=$?
+
+        tail -f "$claude_log" 2>/dev/null &
+        local retry_tail_pid=$!
+        (cd "$wt_dir" && echo "$retry_prompt" | claude --model "$CLAUDE_MODEL" -p >> "$claude_log" 2>&1) || claude_exit=$?
+        kill "$retry_tail_pid" 2>/dev/null || true
+        wait "$retry_tail_pid" 2>/dev/null || true
 
         local gist_url=""
         if [[ -f "$claude_log" ]]; then

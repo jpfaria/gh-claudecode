@@ -222,7 +222,10 @@ PROMPT
   )
 
   local response
-  response=$(echo "$prompt" | claude --model "$CLAUDE_MODEL" -p 2>&1 | tee -a "$issue_log") || true
+  response=$(echo "$prompt" | claude --model "$CLAUDE_MODEL" -p 2>&1) || true
+  if [[ -n "$response" ]]; then
+    echo "$response" >> "$issue_log"
+  fi
 
   if [[ -n "$response" ]]; then
     echo "[refiner] Got response from claude, posting comment on #$number"
@@ -318,7 +321,10 @@ PROMPT
   )
 
   local response
-  response=$(echo "$prompt" | claude --model "$CLAUDE_MODEL" -p 2>&1 | tee -a "$issue_log") || true
+  response=$(echo "$prompt" | claude --model "$CLAUDE_MODEL" -p 2>&1) || true
+  if [[ -n "$response" ]]; then
+    echo "$response" >> "$issue_log"
+  fi
 
   if [[ -z "$response" ]]; then
     echo "[refiner] Error: empty response from claude for issue #$number" | tee -a "$issue_log" >&2
