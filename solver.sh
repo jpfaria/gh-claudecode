@@ -275,15 +275,31 @@ $issue_comments
 PROMPT_EOF
 )
 
-  # Run claude
+  # Run claude — capture output for error reporting
   echo "[solver] Running claude on worktree $wt_dir"
+  local claude_log="$wt_dir/.claude-output.log"
   local claude_exit=0
-  (cd "$wt_dir" && echo "$prompt" | claude --model "$CLAUDE_MODEL" -p) || claude_exit=$?
+  (cd "$wt_dir" && echo "$prompt" | claude --model "$CLAUDE_MODEL" -p 2>&1 | tee "$claude_log") || claude_exit=$?
+
+  # Truncate log for comment (last 50 lines, max 3000 chars)
+  local log_tail=""
+  if [[ -f "$claude_log" ]]; then
+    log_tail=$(tail -50 "$claude_log" | head -c 3000)
+  fi
 
   if [[ "$claude_exit" -ne 0 ]]; then
     echo "[solver] Claude failed with exit code $claude_exit for #$number"
     set_issue_status "$number" "Failed" "failed" "in-progress"
-    gh issue comment "$number" --repo "$REPO" --body "[solver] Failed: claude exited with code $claude_exit."
+    gh issue comment "$number" --repo "$REPO" --body "[solver] **Failed**: claude exited with code $claude_exit.
+
+<details>
+<summary>Claude output (last 50 lines)</summary>
+
+\`\`\`
+${log_tail}
+\`\`\`
+
+</details>"
     git -C "$REPO_DIR" worktree remove "$wt_dir" --force || true
     return
   fi
@@ -295,7 +311,16 @@ PROMPT_EOF
   if [[ "$commit_count" -eq 0 ]]; then
     echo "[solver] No commits made for #$number — marking as failed"
     set_issue_status "$number" "Failed" "failed" "in-progress"
-    gh issue comment "$number" --repo "$REPO" --body "[solver] Failed: claude produced no commits."
+    gh issue comment "$number" --repo "$REPO" --body "[solver] **Failed**: claude produced no commits.
+
+<details>
+<summary>Claude output (last 50 lines)</summary>
+
+\`\`\`
+${log_tail}
+\`\`\`
+
+</details>"
     git -C "$REPO_DIR" worktree remove "$wt_dir" --force || true
     return
   fi
