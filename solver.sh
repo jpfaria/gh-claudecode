@@ -235,15 +235,19 @@ solve_issue() {
   git -C "$REPO_DIR" checkout "$base_branch"
   git -C "$REPO_DIR" pull origin "$base_branch"
 
-  # Clean up stale branch/worktree from previous failed attempts
+  # Reuse existing branch/worktree or create new
   local wt_dir="$WORKTREE_DIR/issue-$number"
   if [[ -d "$wt_dir" ]]; then
-    git -C "$REPO_DIR" worktree remove "$wt_dir" --force 2>/dev/null || true
+    echo "[solver] Reusing existing worktree at $wt_dir"
+    git -C "$wt_dir" fetch origin 2>/dev/null
+    git -C "$wt_dir" merge "$base_branch" --no-edit 2>/dev/null || true
+  elif git -C "$REPO_DIR" rev-parse --verify "$branch" &>/dev/null; then
+    echo "[solver] Reusing existing branch $branch"
+    git -C "$REPO_DIR" worktree add "$wt_dir" "$branch"
+    git -C "$wt_dir" merge "$base_branch" --no-edit 2>/dev/null || true
+  else
+    git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch"
   fi
-  git -C "$REPO_DIR" branch -D "$branch" 2>/dev/null || true
-
-  # Create worktree
-  git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch"
 
   # Build prompt for claude
   local prompt
