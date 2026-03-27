@@ -189,6 +189,9 @@ REFINER_MARKER="<!-- gh-claudecode:refiner -->"
 LOCK_DIR="$SCRIPT_DIR/.locks"
 mkdir -p "$LOCK_DIR"
 
+# Clean stale locks on startup (from previous crashed runs)
+find "$LOCK_DIR" -name "issue-*" -type d -exec rmdir {} + 2>/dev/null || true
+
 acquire_lock() {
   local number="$1"
   mkdir "$LOCK_DIR/issue-$number" 2>/dev/null && return 0
