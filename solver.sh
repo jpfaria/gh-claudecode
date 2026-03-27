@@ -138,34 +138,6 @@ release_lock() {
 # ---------------------------------------------------------------------------
 
 
-# Post execution log as gist and comment on issue
-# Usage: post_execution_log <number> <status> [extra_message]
-post_execution_log() {
-  local number="$1"
-  local exec_status="$2"
-  local extra_msg="${3:-}"
-
-  local issue_log="$LOG_DIR/issue-${number}.log"
-  if [[ ! -f "$issue_log" ]] || [[ ! -s "$issue_log" ]]; then
-    return
-  fi
-
-  local gist_url
-  gist_url=$(upload_log_gist "$number" "$issue_log" "[solver] execution log — $exec_status")
-  if [[ -n "$gist_url" ]]; then
-    local body="[solver] Execution log ($exec_status): $gist_url"
-    if [[ -n "$extra_msg" ]]; then
-      body="[solver] **$exec_status**: $extra_msg
-
-[Execution log]($gist_url)"
-    fi
-    gh issue comment "$number" --repo "$REPO" --body "$body" 2>/dev/null || true
-    echo "[solver] Log posted: $gist_url"
-
-    # Delete log after posting
-    rm -f "$issue_log"
-  fi
-}
 
 get_approved_issues() {
   get_issues_by_board_status_with_comments "TODO"
@@ -196,7 +168,7 @@ check_stale() {
   if [[ -z "$start_comment" ]]; then
     echo "[solver] No '[solver] Started at' comment found for #$number — marking as failed"
     set_issue_status "$number" "Failed" "failed"
-    post_execution_log "$number" "Failed" "no start timestamp found"
+    post_execution_log "$LOG_DIR" "$number" "solver" "Failed" "no start timestamp found"
     return
   fi
 
@@ -231,7 +203,7 @@ check_stale() {
     fi
 
     set_issue_status "$number" "Failed" "failed"
-    post_execution_log "$number" "Failed" "timed out after ${elapsed}s (limit: ${SOLVER_TIMEOUT}s)"
+    post_execution_log "$LOG_DIR" "$number" "solver" "Failed" "timed out after ${elapsed}s (limit: ${SOLVER_TIMEOUT}s)"
   else
     echo "[solver] Issue #$number still within timeout (${elapsed}s / ${SOLVER_TIMEOUT}s)"
   fi
@@ -253,7 +225,7 @@ solve_issue() {
 
   # Archive previous execution log before starting new run
   local issue_log="$LOG_DIR/issue-${number}.log"
-  post_execution_log "$number" "previous run"
+  post_execution_log "$LOG_DIR" "$number" "solver" "previous run"
   : > "$issue_log"  # clear for new run
 
   echo "[solver] Solving issue #$number — $title" | tee -a "$issue_log"
@@ -342,7 +314,7 @@ PROMPT_EOF
     echo "[solver] Claude failed with exit code $claude_exit for #$number" | tee -a "$issue_log"
     sync_worktree_to_develop "$REPO_DIR" "$wt_dir" "$branch" "$number"
     set_issue_status "$number" "Failed" "failed"
-    post_execution_log "$number" "Failed" "claude exited with code $claude_exit"
+    post_execution_log "$LOG_DIR" "$number" "solver" "Failed" "claude exited with code $claude_exit"
     return
   fi
 
@@ -354,7 +326,7 @@ PROMPT_EOF
     echo "[solver] No commits made for #$number — marking as failed" | tee -a "$issue_log"
     sync_worktree_to_develop "$REPO_DIR" "$wt_dir" "$branch" "$number"
     set_issue_status "$number" "Failed" "failed"
-    post_execution_log "$number" "Failed" "claude produced no commits"
+    post_execution_log "$LOG_DIR" "$number" "solver" "Failed" "claude produced no commits"
     return
   fi
 
@@ -383,7 +355,7 @@ PR_EOF
   set_issue_status "$number" "In Review" "in-review"
 
   # Post execution log (success) and comment with PR
-  post_execution_log "$number" "Success" "PR created: $pr_url"
+  post_execution_log "$LOG_DIR" "$number" "solver" "Success" "PR created: $pr_url"
 
   echo "[solver] Issue #$number → In Review (worktree kept at $wt_dir)"
 }

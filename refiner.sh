@@ -137,7 +137,12 @@ start_refinement() {
   fi
   trap 'release_lock "$number"' RETURN
 
-  echo "[refiner] Starting refinement for issue #$number: $title"
+  # Archive previous log if exists
+  local issue_log="$REFINER_LOG_DIR/issue-${number}.log"
+  post_execution_log "$REFINER_LOG_DIR" "$number" "refiner" "previous run"
+  : > "$issue_log"
+
+  echo "[refiner] Starting refinement for issue #$number: $title" | tee -a "$issue_log"
 
   # Set label FIRST to prevent duplicate processing
   set_issue_status "$number" "Business Refining" "refining"
@@ -173,25 +178,18 @@ Reply ONLY with the comment text to be posted on the issue.
 PROMPT
   )
 
-  local claude_log="$REFINER_LOG_DIR/refiner-issue-${number}.log"
   local response
-  response=$(echo "$prompt" | claude --model "$CLAUDE_MODEL" -p 2>&1 | tee "$claude_log") || true
-
-  # Upload log as gist
-  local gist_url=""
-  gist_url=$(upload_log_gist "$number" "$claude_log" "[refiner] start refinement")
-  local log_link=""
-  if [[ -n "$gist_url" ]]; then
-    log_link=" | [log]($gist_url)"
-  fi
+  response=$(echo "$prompt" | claude --model "$CLAUDE_MODEL" -p 2>&1 | tee -a "$issue_log") || true
 
   if [[ -n "$response" ]]; then
-    echo "[refiner] Got response from claude, posting comment on #$number$log_link"
+    echo "[refiner] Got response from claude, posting comment on #$number"
     gh issue comment "$number" --repo "$REPO" --body "${REFINER_MARKER}
 ${response}"
     echo "[refiner] Issue #$number labeled 'refining' and comment posted"
+    post_execution_log "$REFINER_LOG_DIR" "$number" "refiner" "Success" "initial refinement posted"
   else
-    echo "[refiner] Error: empty response from claude for issue #$number" >&2
+    echo "[refiner] Error: empty response from claude for issue #$number" | tee -a "$issue_log" >&2
+    post_execution_log "$REFINER_LOG_DIR" "$number" "refiner" "Failed" "empty response from claude"
   fi
 }
 
@@ -230,7 +228,12 @@ continue_refinement() {
   fi
   trap 'release_lock "$number"' RETURN
 
-  echo "[refiner] Continuing refinement for issue #$number"
+  # Archive previous log if exists
+  local issue_log="$REFINER_LOG_DIR/issue-${number}.log"
+  post_execution_log "$REFINER_LOG_DIR" "$number" "refiner" "previous run"
+  : > "$issue_log"
+
+  echo "[refiner] Continuing refinement for issue #$number" | tee -a "$issue_log"
 
   local comments
   comments=$(echo "$comments_json" | jq -r 'join("\n\n---\n\n")')
@@ -271,20 +274,12 @@ Reply ONLY with the comment text (if still interviewing) or the CHECKLIST_COMPLE
 PROMPT
   )
 
-  local claude_log="$REFINER_LOG_DIR/refiner-issue-${number}.log"
   local response
-  response=$(echo "$prompt" | claude --model "$CLAUDE_MODEL" -p 2>&1 | tee "$claude_log") || true
-
-  # Upload log as gist
-  local gist_url=""
-  gist_url=$(upload_log_gist "$number" "$claude_log" "[refiner] continue refinement")
-  local log_link=""
-  if [[ -n "$gist_url" ]]; then
-    log_link=" | [log]($gist_url)"
-  fi
+  response=$(echo "$prompt" | claude --model "$CLAUDE_MODEL" -p 2>&1 | tee -a "$issue_log") || true
 
   if [[ -z "$response" ]]; then
-    echo "[refiner] Error: empty response from claude for issue #$number" >&2
+    echo "[refiner] Error: empty response from claude for issue #$number" | tee -a "$issue_log" >&2
+    post_execution_log "$REFINER_LOG_DIR" "$number" "refiner" "Failed" "empty response from claude"
     return
   fi
 
@@ -351,7 +346,8 @@ This issue has been split into independent sub-issues:
 
 $(echo -e "$created_refs")
 Each sub-issue has a complete specification and is ready for development."
-    echo "[refiner] Issue #$number split completed"
+    echo "[refiner] Issue #$number split completed" | tee -a "$issue_log"
+    post_execution_log "$REFINER_LOG_DIR" "$number" "refiner" "Success" "issue split into sub-issues"
 
   elif [[ "$first_line" == "CHECKLIST_COMPLETE" ]]; then
     echo "[refiner] Checklist complete for issue #$number, transitioning to ready"
@@ -375,7 +371,8 @@ ${checklist}"
     gh issue edit "$number" --repo "$REPO" --body "$new_body"
     gh issue comment "$number" --repo "$REPO" --body "${REFINER_MARKER}
 Refinement complete. All checklist items have been filled. This issue is now **ready** for development."
-    echo "[refiner] Issue #$number is now ready"
+    echo "[refiner] Issue #$number is now ready" | tee -a "$issue_log"
+    post_execution_log "$REFINER_LOG_DIR" "$number" "refiner" "Success" "checklist complete, issue ready"
   else
     # Safety check: don't post if response contains unprocessed commands
     if echo "$clean_response" | grep -q "^SPLIT_ISSUES\|^CHECKLIST_COMPLETE"; then
@@ -383,9 +380,10 @@ Refinement complete. All checklist items have been filled. This issue is now **r
       echo "[refiner] Response starts with: $(echo "$clean_response" | head -3)"
       return
     fi
-    echo "[refiner] Posting follow-up questions on issue #$number"
+    echo "[refiner] Posting follow-up questions on issue #$number" | tee -a "$issue_log"
     gh issue comment "$number" --repo "$REPO" --body "${REFINER_MARKER}
 ${response}"
+    post_execution_log "$REFINER_LOG_DIR" "$number" "refiner" "Success" "follow-up questions posted"
   fi
 }
 
