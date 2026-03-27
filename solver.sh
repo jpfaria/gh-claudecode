@@ -394,6 +394,9 @@ check_reviews() {
       if [[ -n "$last_pr_comment" ]] && ! echo "$last_pr_comment" | grep -qF "$SOLVER_MARKER"; then
         echo "[solver] Human commented on PR #$pr_number for issue #$number — retrying"
 
+        # Move to In Progress while working
+        set_issue_status "$number" "In Progress" "in-progress" "in-review"
+
         # Get all human comments (feedback)
         local pr_feedback
         pr_feedback=$(gh pr view "$pr_number" --repo "$REPO" --json comments \
@@ -452,6 +455,8 @@ Retry failed: claude exited with code $claude_exit."
 
         gh pr comment "$pr_number" --repo "$REPO" --body "${SOLVER_MARKER}
 Feedback addressed. Please re-review."
+        # Back to In Review
+        set_issue_status "$number" "In Review" "in-review" "in-progress"
         echo "[solver] Pushed fixes for PR #$pr_number"
 
       else
