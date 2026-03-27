@@ -17,6 +17,7 @@ REPO="${REPO:-}"
 REPO_DIR="${REPO_DIR:-}"
 SOLVER_INTERVAL="${SOLVER_INTERVAL:-600}"
 SOLVER_TIMEOUT="${SOLVER_TIMEOUT:-3600}"
+SOLVER_PARALLEL="${SOLVER_PARALLEL:-3}"
 CLAUDE_MODEL="${CLAUDE_MODEL:-claude-sonnet-4-6}"
 WORKTREE_DIR="${WORKTREE_DIR:-$SCRIPT_DIR/worktrees}"
 
@@ -33,6 +34,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --timeout)
       SOLVER_TIMEOUT="$2"
+      shift 2
+      ;;
+    --parallel)
+      SOLVER_PARALLEL="$2"
       shift 2
       ;;
     --model)
@@ -470,7 +475,7 @@ Feedback addressed. Please re-review."
 # Startup
 # ---------------------------------------------------------------------------
 
-echo "[solver] Starting for $REPO (interval: ${SOLVER_INTERVAL}s, timeout: ${SOLVER_TIMEOUT}s, model: $CLAUDE_MODEL)"
+echo "[solver] Starting for $REPO (interval: ${SOLVER_INTERVAL}s, timeout: ${SOLVER_TIMEOUT}s, parallel: ${SOLVER_PARALLEL}, model: $CLAUDE_MODEL)"
 
 init_project_board || true
 
@@ -498,21 +503,27 @@ while true; do
     done
   fi
 
-  # --- Approved issues (pick first one, sequential) ---
+  # --- Approved issues (parallel) ---
   approved=$(get_approved_issues)
   approved_count=$(echo "$approved" | jq 'length')
   echo "[solver] Found $approved_count approved issue(s)"
 
-  if [[ "$approved_count" -gt 0 ]]; then
-    first=$(echo "$approved" | jq -c '.[0]')
-    number=$(echo "$first" | jq -r '.number')
-    title=$(echo "$first" | jq -r '.title')
-    body=$(echo "$first" | jq -r '.body')
-    comments_json=$(echo "$first" | jq -c '.comments')
-    echo "[solver] Next issue to solve: #$number — $title"
+  running=0
+  echo "$approved" | jq -c '.[]' | while IFS= read -r item; do
+    number=$(echo "$item" | jq -r '.number')
+    title=$(echo "$item" | jq -r '.title')
+    body=$(echo "$item" | jq -r '.body')
+    comments_json=$(echo "$item" | jq -c '.comments')
+    echo "[solver] Starting issue #$number — $title"
 
-    solve_issue "$number" "$title" "$body" "$comments_json"
-  fi
+    solve_issue "$number" "$title" "$body" "$comments_json" &
+    running=$((running + 1))
+    if [[ "$running" -ge "$SOLVER_PARALLEL" ]]; then
+      wait -n 2>/dev/null || wait
+      running=$((running - 1))
+    fi
+  done
+  wait
 
   # --- In Review issues (PR monitoring) ---
   check_reviews
