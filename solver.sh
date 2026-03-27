@@ -148,9 +148,15 @@ check_stale() {
 
   echo "[solver] Checking stale for issue #$number"
 
-  # Find "[solver] Started at" comment from pre-fetched data
+  # Find the LATEST "[solver] Started at" that comes AFTER any "[solver] Marked as failed" or "[solver] Failed"
+  # This handles retries: old timestamps are ignored if there was a failure after them
   local start_comment
-  start_comment=$(echo "$comments_json" | jq -r '[.[] | select(startswith("[solver] Started at"))] | last // empty')
+  start_comment=$(echo "$comments_json" | jq -r '
+    # Find index of last failure comment
+    (to_entries | map(select(.value | test("^\\[solver\\] (Marked as failed|Failed)"))) | last // {key: -1}) as $last_fail |
+    # Find Started comments after the last failure
+    [to_entries[] | select(.key > $last_fail.key) | select(.value | startswith("[solver] Started at")) | .value] | last // empty
+  ')
 
   if [[ -z "$start_comment" ]]; then
     echo "[solver] No '[solver] Started at' comment found for #$number — marking as failed"
@@ -509,20 +515,7 @@ while true; do
 
   echo "[solver] Polling at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
-  # --- In-progress issues (stale check placeholder) ---
-  in_progress=$(get_in_progress_issues)
-  in_progress_count=$(echo "$in_progress" | jq 'length')
-  echo "[solver] Found $in_progress_count in-progress issue(s)"
-
-  if [[ "$in_progress_count" -gt 0 ]]; then
-    echo "$in_progress" | jq -c '.[]' | while read -r issue; do
-      ip_number=$(echo "$issue" | jq -r '.number')
-      ip_comments=$(echo "$issue" | jq -c '.comments')
-      check_stale "$ip_number" "$ip_comments"
-    done
-  fi
-
-  # --- Approved issues (parallel) ---
+  # --- Approved issues first (parallel) ---
   approved=$(get_approved_issues)
   approved_count=$(echo "$approved" | jq 'length')
   echo "[solver] Found $approved_count approved issue(s)"
@@ -555,6 +548,18 @@ while true; do
     fi
   done
   wait
+
+  # --- In-progress issues (stale check — after processing approved) ---
+  in_progress=$(get_in_progress_issues)
+  in_progress_count=$(echo "$in_progress" | jq 'length')
+  if [[ "$in_progress_count" -gt 0 ]]; then
+    echo "[solver] Checking $in_progress_count in-progress issue(s) for staleness"
+    echo "$in_progress" | jq -c '.[]' | while read -r issue; do
+      ip_number=$(echo "$issue" | jq -r '.number')
+      ip_comments=$(echo "$issue" | jq -c '.comments')
+      check_stale "$ip_number" "$ip_comments"
+    done
+  fi
 
   # --- In Review issues (PR monitoring) ---
   check_reviews
