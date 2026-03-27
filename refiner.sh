@@ -222,10 +222,12 @@ PROMPT
   )
 
   local response
-  response=$(echo "$prompt" | claude --model "$CLAUDE_MODEL" -p 2>&1) || true
-  if [[ -n "$response" ]]; then
-    echo "$response" >> "$issue_log"
-  fi
+  local raw_json
+  raw_json=$(echo "$prompt" | claude --model "$CLAUDE_MODEL" --output-format stream-json --verbose -p 2>&1) || true
+  # Log full JSON
+  echo "$raw_json" >> "$issue_log"
+  # Extract result text
+  response=$(echo "$raw_json" | grep '"type":"result"' | jq -r '.result // empty' 2>/dev/null | head -1)
 
   if [[ -n "$response" ]]; then
     echo "[refiner] Got response from claude, posting comment on #$number"
@@ -321,10 +323,12 @@ PROMPT
   )
 
   local response
-  response=$(echo "$prompt" | claude --model "$CLAUDE_MODEL" -p 2>&1) || true
-  if [[ -n "$response" ]]; then
-    echo "$response" >> "$issue_log"
-  fi
+  local raw_json
+  raw_json=$(echo "$prompt" | claude --model "$CLAUDE_MODEL" --output-format stream-json --verbose -p 2>&1) || true
+  # Log full JSON
+  echo "$raw_json" >> "$issue_log"
+  # Extract result text
+  response=$(echo "$raw_json" | grep '"type":"result"' | jq -r '.result // empty' 2>/dev/null | head -1)
 
   if [[ -z "$response" ]]; then
     echo "[refiner] Error: empty response from claude for issue #$number" | tee -a "$issue_log" >&2
