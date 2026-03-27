@@ -132,6 +132,22 @@ release_lock() {
 # Functions
 # ---------------------------------------------------------------------------
 
+# Upload log file as gist, return URL
+upload_log_gist() {
+  local number="$1"
+  local log_file="$2"
+  local description="$3"
+
+  if [[ ! -f "$log_file" ]] || [[ ! -s "$log_file" ]]; then
+    echo ""
+    return
+  fi
+
+  local gist_url
+  gist_url=$(gh gist create "$log_file" --desc "[solver] $description — issue #$number" --public 2>/dev/null | tail -1)
+  echo "$gist_url"
+}
+
 get_approved_issues() {
   get_issues_by_board_status_with_comments "Approved"
 }
@@ -293,19 +309,22 @@ PROMPT_EOF
     log_tail=$(tail -50 "$claude_log" | head -c 3000)
   fi
 
+  # Upload log as gist
+  local gist_url=""
+  if [[ -f "$claude_log" ]]; then
+    gist_url=$(upload_log_gist "$number" "$claude_log" "claude output")
+  fi
+  local log_link=""
+  if [[ -n "$gist_url" ]]; then
+    log_link="
+
+[Full claude output log]($gist_url)"
+  fi
+
   if [[ "$claude_exit" -ne 0 ]]; then
     echo "[solver] Claude failed with exit code $claude_exit for #$number"
     set_issue_status "$number" "Failed" "failed" "in-progress"
-    gh issue comment "$number" --repo "$REPO" --body "[solver] **Failed**: claude exited with code $claude_exit.
-
-<details>
-<summary>Claude output (last 50 lines)</summary>
-
-\`\`\`
-${log_tail}
-\`\`\`
-
-</details>"
+    gh issue comment "$number" --repo "$REPO" --body "[solver] **Failed**: claude exited with code $claude_exit.$log_link"
     git -C "$REPO_DIR" worktree remove "$wt_dir" --force || true
     return
   fi
@@ -317,16 +336,7 @@ ${log_tail}
   if [[ "$commit_count" -eq 0 ]]; then
     echo "[solver] No commits made for #$number — marking as failed"
     set_issue_status "$number" "Failed" "failed" "in-progress"
-    gh issue comment "$number" --repo "$REPO" --body "[solver] **Failed**: claude produced no commits.
-
-<details>
-<summary>Claude output (last 50 lines)</summary>
-
-\`\`\`
-${log_tail}
-\`\`\`
-
-</details>"
+    gh issue comment "$number" --repo "$REPO" --body "[solver] **Failed**: claude produced no commits.$log_link"
     git -C "$REPO_DIR" worktree remove "$wt_dir" --force || true
     return
   fi
@@ -340,7 +350,7 @@ ${log_tail}
   pr_url=$(gh pr create --repo "$REPO" --head "$branch" --base "$base_branch" --title "$title" --body "$(cat <<PR_EOF
 Closes #$number
 
-Automated by gh-claudecode solver.
+Automated by gh-claudecode solver.$log_link
 PR_EOF
 )")
 
@@ -350,7 +360,7 @@ PR_EOF
   set_issue_status "$number" "In Review" "in-review" "in-progress"
 
   # Comment with PR URL
-  gh issue comment "$number" --repo "$REPO" --body "[solver] PR created: $pr_url — awaiting review."
+  gh issue comment "$number" --repo "$REPO" --body "[solver] PR created: $pr_url — awaiting review.$log_link"
 
   echo "[solver] Issue #$number → In Review (worktree kept at $wt_dir)"
 }
@@ -415,27 +425,45 @@ check_reviews() {
       fi
 
     else
-      # Check if there's a new human comment on the PR (not from solver)
+      # Check for human feedback: PR comments, review bodies, inline code comments
       local SOLVER_MARKER="<!-- gh-claudecode:solver -->"
+
+      # Get last PR comment
       local last_pr_comment
       last_pr_comment=$(gh pr view "$pr_number" --repo "$REPO" --json comments \
         --jq '.comments[-1].body // ""' 2>/dev/null)
 
-      if [[ -n "$last_pr_comment" ]] && ! echo "$last_pr_comment" | grep -qF "$SOLVER_MARKER"; then
-        echo "[solver] Human commented on PR #$pr_number for issue #$number — retrying"
+      # Get review bodies (formal reviews)
+      local review_bodies
+      review_bodies=$(gh pr view "$pr_number" --repo "$REPO" --json reviews \
+        --jq '[.reviews[] | select(.body != "") | .body] | join("\n---\n")' 2>/dev/null)
 
-        # Move to In Progress while working
+      # Get inline code review comments
+      local inline_comments
+      inline_comments=$(gh api "repos/$REPO/pulls/$pr_number/comments" \
+        --jq '[.[] | "\(.path):\(.line // .original_line): \(.body)"] | join("\n")' 2>/dev/null)
+
+      # Determine if there's new human feedback
+      local has_feedback=false
+      if [[ -n "$last_pr_comment" ]] && ! echo "$last_pr_comment" | grep -qF "$SOLVER_MARKER"; then
+        has_feedback=true
+      fi
+      if [[ -n "$review_bodies" ]]; then
+        has_feedback=true
+      fi
+      if [[ -n "$inline_comments" ]]; then
+        has_feedback=true
+      fi
+
+      if [[ "$has_feedback" == "true" ]]; then
+        echo "[solver] Human feedback on PR #$pr_number for issue #$number — retrying"
+
         set_issue_status "$number" "In Progress" "in-progress" "in-review"
 
-        # Get all human comments (feedback)
-        local pr_feedback
-        pr_feedback=$(gh pr view "$pr_number" --repo "$REPO" --json comments \
+        # Collect all human PR comments
+        local pr_comments_text
+        pr_comments_text=$(gh pr view "$pr_number" --repo "$REPO" --json comments \
           --jq "[.comments[] | select(.body | contains(\"$SOLVER_MARKER\") | not) | .body] | join(\"\n---\n\")" 2>/dev/null)
-
-        # Get inline review comments
-        local inline_comments
-        inline_comments=$(gh api "repos/$REPO/pulls/$pr_number/comments" \
-          --jq '[.[] | "\(.path):\(.line // .original_line): \(.body)"] | join("\n")' 2>/dev/null)
 
         if [[ ! -d "$wt_dir" ]]; then
           echo "[solver] Worktree missing for issue #$number — recreating"
@@ -446,7 +474,6 @@ check_reviews() {
           }
         fi
 
-        # Pull latest
         git -C "$wt_dir" pull origin "$branch" 2>/dev/null || true
 
         local retry_prompt
@@ -455,37 +482,51 @@ You are fixing a GitHub PR that received feedback from the reviewer.
 
 ## Issue #$number: $title
 
-## Reviewer Feedback
-$pr_feedback
+## PR Comments
+$pr_comments_text
 
-## Inline Comments on Code
+## Review Comments
+$review_bodies
+
+## Inline Code Comments
 $inline_comments
 
 ## Instructions
 1. Read CLAUDE.md in the project root for project context and conventions.
-2. Address ALL reviewer feedback above.
+2. Address ALL reviewer feedback above (PR comments, review comments, and inline code comments).
 3. Make sure the code compiles/runs without errors or warnings.
 4. Commit your fixes with a descriptive message.
 5. Do NOT push — the automation will handle pushing.
 RETRY_EOF
 )
 
+        local claude_log="$wt_dir/.claude-retry-output.log"
         local claude_exit=0
-        (cd "$wt_dir" && echo "$retry_prompt" | claude --model "$CLAUDE_MODEL" -p) || claude_exit=$?
+        (cd "$wt_dir" && echo "$retry_prompt" | claude --model "$CLAUDE_MODEL" -p 2>&1 | tee "$claude_log") || claude_exit=$?
+
+        local gist_url=""
+        if [[ -f "$claude_log" ]]; then
+          gist_url=$(upload_log_gist "$number" "$claude_log" "retry output")
+        fi
+        local log_link=""
+        if [[ -n "$gist_url" ]]; then
+          log_link="
+[Full claude output log]($gist_url)"
+        fi
 
         if [[ "$claude_exit" -ne 0 ]]; then
           echo "[solver] Claude retry failed for #$number (exit $claude_exit)"
           gh pr comment "$pr_number" --repo "$REPO" --body "${SOLVER_MARKER}
-Retry failed: claude exited with code $claude_exit."
+Retry failed: claude exited with code $claude_exit.$log_link"
+          set_issue_status "$number" "In Review" "in-review" "in-progress"
           continue
         fi
 
-        # Push new commits (updates the existing PR)
         git -C "$wt_dir" push origin "$branch" 2>/dev/null
 
         gh pr comment "$pr_number" --repo "$REPO" --body "${SOLVER_MARKER}
-Feedback addressed. Please re-review."
-        # Back to In Review
+Feedback addressed. Please re-review.$log_link"
+
         set_issue_status "$number" "In Review" "in-review" "in-progress"
         echo "[solver] Pushed fixes for PR #$pr_number"
 
