@@ -130,6 +130,12 @@ start_refinement() {
   local number="$1"
   local title="$2"
 
+  if ! acquire_lock "$number"; then
+    echo "[refiner] Skipping #$number — already being processed"
+    return
+  fi
+  trap 'release_lock "$number"' RETURN
+
   echo "[refiner] Starting refinement for issue #$number: $title"
 
   local body
@@ -179,6 +185,21 @@ ${response}"
 
 REFINER_MARKER="<!-- gh-claudecode:refiner -->"
 
+# Lock mechanism to prevent parallel processing of the same issue
+LOCK_DIR="$SCRIPT_DIR/.locks"
+mkdir -p "$LOCK_DIR"
+
+acquire_lock() {
+  local number="$1"
+  mkdir "$LOCK_DIR/issue-$number" 2>/dev/null && return 0
+  return 1
+}
+
+release_lock() {
+  local number="$1"
+  rmdir "$LOCK_DIR/issue-$number" 2>/dev/null || true
+}
+
 
 # Continue refinement of an issue: either complete the checklist or ask more questions
 # Args: number title body comments_json
@@ -187,6 +208,12 @@ continue_refinement() {
   local title="$2"
   local body="$3"
   local comments_json="$4"
+
+  if ! acquire_lock "$number"; then
+    echo "[refiner] Skipping #$number — already being processed"
+    return
+  fi
+  trap 'release_lock "$number"' RETURN
 
   echo "[refiner] Continuing refinement for issue #$number"
 
