@@ -153,19 +153,23 @@ ${response}"
 REFINER_MARKER="<!-- gh-claudecode:refiner -->"
 
 # Check if the last comment on an issue was made by a human (not the refiner)
-# Returns 0 (true) if human, 1 (false) if refiner comment
-# Uses a hidden HTML marker instead of author login (supports same-account usage)
+# Returns 0 (true) if human replied, 1 (false) if no interaction or refiner was last
 last_comment_is_human() {
   local number="$1"
+
+  # Check if refiner ever commented on this issue
+  local has_refiner_comment
+  has_refiner_comment=$(gh issue view "$number" --repo "$REPO" --json comments \
+    -q "[.comments[].body | select(contains(\"$REFINER_MARKER\"))] | length")
+
+  # Refiner never commented → skip (issue was placed in Refining manually)
+  if [[ "$has_refiner_comment" -eq 0 ]]; then
+    return 1
+  fi
 
   local last_body
   last_body=$(gh issue view "$number" --repo "$REPO" --json comments \
     -q '.comments[-1].body // empty')
-
-  # No comments yet — treat as human (the body itself is from human)
-  if [[ -z "$last_body" ]]; then
-    return 0
-  fi
 
   # If last comment contains our marker → not human
   if echo "$last_body" | grep -qF "$REFINER_MARKER"; then
