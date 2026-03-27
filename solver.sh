@@ -233,6 +233,7 @@ check_stale() {
 }
 
 # Args: number title body comments_json
+# All output is redirected to LOG_DIR/issue-{N}.log
 solve_issue() {
   local number="$1"
   local title="$2"
@@ -245,13 +246,22 @@ solve_issue() {
   fi
   trap 'release_lock "$number"' RETURN
 
-  echo "[solver] Solving issue #$number — $title"
+  # Setup log — archive previous log as gist before clearing
+  local issue_log="$LOG_DIR/issue-${number}.log"
+  if [[ -f "$issue_log" ]] && [[ -s "$issue_log" ]]; then
+    local prev_gist
+    prev_gist=$(upload_log_gist "$number" "$issue_log" "[solver] previous run log")
+    if [[ -n "$prev_gist" ]]; then
+      echo "[solver] Previous run log: $prev_gist"
+      gh issue comment "$number" --repo "$REPO" --body "[solver] Previous run log archived: $prev_gist" 2>/dev/null || true
+    fi
+  fi
+  : > "$issue_log"  # clear log for new run
+
+  echo "[solver] Solving issue #$number — $title" | tee -a "$issue_log"
 
   # Swap status: approved -> in-progress
   set_issue_status "$number" "In Progress" "in-progress"
-
-  # Clear previous logs for this issue
-  rm -f "$LOG_DIR/issue-${number}.log"
 
   # Comment with start timestamp
   local start_ts
@@ -325,16 +335,15 @@ $issue_comments
 PROMPT_EOF
 )
 
-  # Run claude — capture output to LOG_DIR (accessible by check_stale)
-  echo "[solver] Running claude on worktree $wt_dir"
-  local claude_log="$LOG_DIR/issue-${number}.log"
+  # Run claude — append output to issue log
+  echo "[solver] Running claude on worktree $wt_dir" | tee -a "$issue_log"
   local claude_exit=0
-  (cd "$wt_dir" && echo "$prompt" | claude --model "$CLAUDE_MODEL" -p 2>&1 | tee "$claude_log") || claude_exit=$?
+  (cd "$wt_dir" && echo "$prompt" | claude --model "$CLAUDE_MODEL" -p 2>&1 | tee -a "$issue_log") || claude_exit=$?
 
   # Upload log as gist
   local gist_url=""
-  if [[ -f "$claude_log" ]]; then
-    gist_url=$(upload_log_gist "$number" "$claude_log" "claude output")
+  if [[ -f "$issue_log" ]]; then
+    gist_url=$(upload_log_gist "$number" "$issue_log" "[solver] claude output")
   fi
   local log_link=""
   if [[ -n "$gist_url" ]]; then
