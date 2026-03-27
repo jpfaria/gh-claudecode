@@ -296,6 +296,7 @@ Split from #$number" 2>/dev/null)
           created_refs="${created_refs}- ${new_url}\n"
           # Set as Refining + Ready immediately (already has full checklist)
           set_issue_status "$new_num" "Ready" "ready"
+          gh issue edit "$new_num" --repo "$REPO" --add-label "system" 2>/dev/null || true
         fi
         sub_title="${BASH_REMATCH[1]}"
         sub_body=""
