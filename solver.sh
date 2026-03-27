@@ -276,17 +276,23 @@ solve_issue() {
     base_branch="develop"
   fi
 
-  # Reuse existing branch/worktree or create new
+  # Setup worktree
   local wt_dir="$WORKTREE_DIR/issue-$number"
   if [[ -d "$wt_dir" ]]; then
     echo "[solver] Reusing existing worktree at $wt_dir"
-    git -C "$wt_dir" fetch origin 2>/dev/null
-    git -C "$wt_dir" merge "$base_branch" --no-edit 2>/dev/null || true
-  elif git -C "$REPO_DIR" rev-parse --verify "$branch" &>/dev/null; then
-    echo "[solver] Reusing existing branch $branch"
-    git -C "$REPO_DIR" worktree add "$wt_dir" "$branch" 2>/dev/null
+    git -C "$wt_dir" checkout "$branch" 2>/dev/null || true
+    git -C "$wt_dir" pull origin "$branch" 2>/dev/null || true
+    git -C "$wt_dir" merge "origin/$base_branch" --no-edit 2>/dev/null || true
+  elif git -C "$REPO_DIR" rev-parse --verify "origin/$branch" &>/dev/null; then
+    echo "[solver] Branch $branch exists on remote, creating worktree"
+    git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch" "origin/$branch" 2>/dev/null || {
+      # Branch may exist locally but not as worktree
+      git -C "$REPO_DIR" branch -D "$branch" 2>/dev/null || true
+      git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch" "origin/$branch" 2>/dev/null
+    }
     git -C "$wt_dir" merge "origin/$base_branch" --no-edit 2>/dev/null || true
   else
+    echo "[solver] Creating new branch $branch from $base_branch"
     git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch" "origin/$base_branch" 2>/dev/null
   fi
 
@@ -352,23 +358,43 @@ PROMPT_EOF
     return
   fi
 
-  # Pull + Push branch
+  # Push branch
   echo "[solver] Pushing branch $branch"
-  git -C "$wt_dir" pull --rebase origin "$branch" 2>/dev/null || true
-  git -C "$wt_dir" push -u origin "$branch"
+  git -C "$wt_dir" push -u origin "$branch" 2>&1 || {
+    # If push fails, try force push (branch may have diverged from previous failed attempt)
+    echo "[solver] Push failed, trying force push..."
+    git -C "$wt_dir" push -u origin "$branch" --force-with-lease 2>&1 || {
+      echo "[solver] Force push also failed for #$number"
+      set_issue_status "$number" "Failed" "failed"
+      gh issue comment "$number" --repo "$REPO" --body "[solver] **Failed**: could not push branch $branch.$log_link"
+      return
+    }
+  }
 
-  # Create PR
+  # Merge into develop worktree
+  merge_to_develop "$REPO_DIR" "$branch" || {
+    echo "[solver] Warning: could not merge into develop, continuing with PR"
+  }
+
+  # Create PR if doesn't exist
+  local existing_pr
+  existing_pr=$(gh pr list --repo "$REPO" --head "$branch" --json number -q '.[0].number' 2>/dev/null)
+
   local pr_url
-  pr_url=$(gh pr create --repo "$REPO" --head "$branch" --base "$base_branch" --title "$title" --body "$(cat <<PR_EOF
+  if [[ -n "$existing_pr" ]]; then
+    pr_url="https://github.com/$REPO/pull/$existing_pr"
+    echo "[solver] PR already exists: $pr_url"
+  else
+    pr_url=$(gh pr create --repo "$REPO" --head "$branch" --base "$base_branch" --title "$title" --body "$(cat <<PR_EOF
 Closes #$number
 
 Automated by gh-claudecode solver.$log_link
 PR_EOF
 )")
+    echo "[solver] PR created: $pr_url"
+  fi
 
-  echo "[solver] PR created: $pr_url"
-
-  # Move to In Review — worktree stays alive for potential retry
+  # Move to In Review
   set_issue_status "$number" "In Review" "in-review"
 
   # Comment with PR URL
@@ -423,6 +449,10 @@ check_reviews() {
       echo "[solver] PR #$pr_number merged for issue #$number"
       set_issue_status "$number" "Done" "done"
       gh issue comment "$number" --repo "$REPO" --body "[solver] PR #$pr_number merged. Done!"
+      # Pull develop to get merged changes
+      git -C "$REPO_DIR" checkout develop 2>/dev/null
+      git -C "$REPO_DIR" pull origin develop 2>/dev/null
+      echo "[solver] ✓ Develop worktree updated"
       # Cleanup worktree
       if [[ -d "$wt_dir" ]]; then
         git -C "$REPO_DIR" worktree remove "$wt_dir" --force 2>/dev/null || true
@@ -537,8 +567,16 @@ Retry failed: claude exited with code $claude_exit.$log_link"
           continue
         fi
 
-        git -C "$wt_dir" pull --rebase origin "$branch" 2>/dev/null || true
-        git -C "$wt_dir" push origin "$branch" 2>/dev/null
+        git -C "$wt_dir" push origin "$branch" 2>/dev/null || {
+          git -C "$wt_dir" push origin "$branch" --force-with-lease 2>/dev/null || {
+            echo "[solver] Could not push retry fixes for #$number"
+            set_issue_status "$number" "In Review" "in-review"
+            continue
+          }
+        }
+
+        # Merge into develop worktree
+        merge_to_develop "$REPO_DIR" "$branch" || true
 
         gh pr comment "$pr_number" --repo "$REPO" --body "${SOLVER_MARKER}
 Feedback addressed. Please re-review.$log_link"

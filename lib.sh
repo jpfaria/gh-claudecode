@@ -453,6 +453,31 @@ upload_log_gist() {
   echo "$gist_url"
 }
 
+# Merge issue branch into develop worktree (main worktree)
+# Usage: merge_to_develop <repo_dir> <branch>
+merge_to_develop() {
+  local repo_dir="$1"
+  local branch="$2"
+
+  echo "[lib] Merging $branch into develop worktree..."
+  git -C "$repo_dir" fetch origin 2>/dev/null
+  git -C "$repo_dir" checkout develop 2>/dev/null || {
+    echo "[lib] Warning: could not checkout develop"
+    return 1
+  }
+  git -C "$repo_dir" pull origin develop 2>/dev/null || true
+  git -C "$repo_dir" merge "$branch" --no-edit 2>/dev/null || {
+    echo "[lib] Warning: merge conflict merging $branch into develop — aborting"
+    git -C "$repo_dir" merge --abort 2>/dev/null || true
+    return 1
+  }
+  git -C "$repo_dir" push origin develop 2>/dev/null || {
+    echo "[lib] Warning: could not push develop"
+    return 1
+  }
+  echo "[lib] ✓ $branch merged into develop and pushed"
+}
+
 # All workflow labels (used for cleanup)
 ALL_WORKFLOW_LABELS="refining ready approved in-progress in-review done failed"
 
