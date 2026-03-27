@@ -67,8 +67,8 @@ Map the step-by-step interaction:
 Ask: "Walk me through how you imagine using this, step by step"
 
 ### 5. Type and Priority
-- **Type**: bug / feature / enhancement (usually you can infer this)
-- **Priority**: infer from context (do NOT ask the user about priority or urgency)
+- **Type**: bug / feature / enhancement — infer from context. Only ask if truly ambiguous (e.g. could be a bug or a feature request)
+- **Priority**: always infer from context (NEVER ask the user about priority or urgency)
 
 ---
 
