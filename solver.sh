@@ -583,7 +583,7 @@ while true; do
     body=$(echo "$item" | jq -r '.body')
     comments_json=$(echo "$item" | jq -c '.comments')
 
-    local issue_log="$LOG_DIR/issue-${number}.log"
+    issue_log="$LOG_DIR/issue-${number}.log"
     echo "[solver] Starting issue #$number — $title (log: $issue_log)"
 
     (solve_issue "$number" "$title" "$body" "$comments_json" 2>&1 | tee "$issue_log") &
@@ -617,10 +617,9 @@ while true; do
     echo ""
 
     # Upload combined cycle log as gist
-    local cycle_log="$LOG_DIR/cycle-$(date -u '+%Y%m%dT%H%M%SZ').log"
+    cycle_log="$LOG_DIR/cycle-$(date -u '+%Y%m%dT%H%M%SZ').log"
     cat "$LOG_DIR"/issue-*.log > "$cycle_log" 2>/dev/null
     if [[ -s "$cycle_log" ]]; then
-      local cycle_gist
       cycle_gist=$(upload_log_gist "cycle" "$cycle_log" "solver cycle $local_cycle_ts")
       if [[ -n "$cycle_gist" ]]; then
         echo "[solver] Full cycle log: $cycle_gist"
