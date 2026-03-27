@@ -71,16 +71,19 @@ done
 # Repo setup
 # ---------------------------------------------------------------------------
 
-mkdir -p "$WORKTREE_DIR"
-
 # Use provided repo dir or clone
 if [[ -z "$REPO_DIR" ]]; then
+  mkdir -p "$WORKTREE_DIR"
   REPO_DIR="$WORKTREE_DIR/_repo"
   if [[ ! -d "$REPO_DIR" ]]; then
     echo "[solver] Cloning $REPO into $REPO_DIR"
     gh repo clone "$REPO" "$REPO_DIR"
   fi
 fi
+
+# Worktrees go next to the repo (sibling directory)
+WORKTREE_DIR="$(dirname "$REPO_DIR")/$(basename "$REPO_DIR")-worktrees"
+mkdir -p "$WORKTREE_DIR"
 
 if [[ ! -d "$REPO_DIR/.git" ]]; then
   echo "[solver] Error: $REPO_DIR is not a git repository" >&2
@@ -98,6 +101,24 @@ else
   git -C "$REPO_DIR" checkout main 2>/dev/null
   git -C "$REPO_DIR" pull origin main 2>/dev/null
 fi
+
+# ---------------------------------------------------------------------------
+# Lock mechanism
+# ---------------------------------------------------------------------------
+
+LOCK_DIR="$SCRIPT_DIR/.locks"
+mkdir -p "$LOCK_DIR"
+
+acquire_lock() {
+  local number="$1"
+  mkdir "$LOCK_DIR/solver-issue-$number" 2>/dev/null && return 0
+  return 1
+}
+
+release_lock() {
+  local number="$1"
+  rmdir "$LOCK_DIR/solver-issue-$number" 2>/dev/null || true
+}
 
 # ---------------------------------------------------------------------------
 # Functions
@@ -168,6 +189,12 @@ solve_issue() {
   local title="$2"
   local issue_body="$3"
   local comments_json="$4"
+
+  if ! acquire_lock "$number"; then
+    echo "[solver] Skipping #$number — already being processed"
+    return
+  fi
+  trap 'release_lock "$number"' RETURN
 
   echo "[solver] Solving issue #$number — $title"
 
