@@ -221,6 +221,64 @@ get_issues_by_board_status() {
      | {number: .content.number, title: .content.title, item_id: .id}]'
 }
 
+# Get issues from board with comments included (single query, avoids N+1)
+# Usage: get_issues_by_board_status_with_comments "Refining"
+# Returns JSON array with number, title, item_id, comments (last 5 bodies)
+get_issues_by_board_status_with_comments() {
+  local target_status="$1"
+  local owner="${REPO%%/*}"
+  local repo_name="${REPO##*/}"
+  local project_number="${PROJECT_NUMBER:-1}"
+
+  if [[ -z "$PROJECT_ID" ]]; then
+    echo "[]"
+    return
+  fi
+
+  gh api graphql -f query="
+  {
+    user(login: \"$owner\") {
+      projectV2(number: $project_number) {
+        items(first: 100) {
+          nodes {
+            id
+            fieldValueByName(name: \"Status\") {
+              ... on ProjectV2ItemFieldSingleSelectValue {
+                name
+              }
+            }
+            content {
+              ... on Issue {
+                number
+                title
+                state
+                body
+                comments(last: 20) {
+                  nodes {
+                    body
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }" 2>/dev/null | jq --arg status "$target_status" '
+    [.data.user.projectV2.items.nodes[]
+     | select(.fieldValueByName.name == $status)
+     | select(.content.state == "OPEN")
+     | {
+         number: .content.number,
+         title: .content.title,
+         body: .content.body,
+         item_id: .id,
+         comments: [.content.comments.nodes[].body],
+         last_comment: (.content.comments.nodes[-1].body // ""),
+         has_comments: (.content.comments.nodes | length > 0)
+       }]'
+}
+
 # Set both board status AND label in one call
 # Usage: set_issue_status <issue_number> <status_name> <label_name>
 set_issue_status() {

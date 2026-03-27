@@ -124,10 +124,6 @@ get_new_issues() {
       ) | {number, title}]'
 }
 
-# Get issues being refined: board status = "Refining"
-get_refining_issues() {
-  get_issues_by_board_status "Refining"
-}
 
 # Perform initial refinement of a new issue using claude
 start_refinement() {
@@ -183,46 +179,19 @@ ${response}"
 
 REFINER_MARKER="<!-- gh-claudecode:refiner -->"
 
-# Check if the last comment on an issue was made by a human (not the refiner)
-# Returns 0 (true) if human replied, 1 (false) if no interaction or refiner was last
-last_comment_is_human() {
-  local number="$1"
-
-  # Check if refiner ever commented on this issue
-  local has_refiner_comment
-  has_refiner_comment=$(gh issue view "$number" --repo "$REPO" --json comments \
-    -q "[.comments[].body | select(contains(\"$REFINER_MARKER\"))] | length")
-
-  # Refiner never commented → skip (issue was placed in Refining manually)
-  if [[ "$has_refiner_comment" -eq 0 ]]; then
-    return 1
-  fi
-
-  local last_body
-  last_body=$(gh issue view "$number" --repo "$REPO" --json comments \
-    -q '.comments[-1].body // empty')
-
-  # If last comment contains our marker → not human
-  if echo "$last_body" | grep -qF "$REFINER_MARKER"; then
-    return 1
-  fi
-
-  return 0
-}
 
 # Continue refinement of an issue: either complete the checklist or ask more questions
+# Args: number title body comments_json
 continue_refinement() {
   local number="$1"
+  local title="$2"
+  local body="$3"
+  local comments_json="$4"
 
   echo "[refiner] Continuing refinement for issue #$number"
 
-  local issue_json
-  issue_json=$(gh issue view "$number" --repo "$REPO" --json title,body,comments)
-
-  local title body comments
-  title=$(echo "$issue_json" | jq -r '.title')
-  body=$(echo "$issue_json" | jq -r '.body')
-  comments=$(echo "$issue_json" | jq -r '[.comments[-20:][].body] | join("\n\n---\n\n")')
+  local comments
+  comments=$(echo "$comments_json" | jq -r 'join("\n\n---\n\n")')
 
   local prompt
   prompt=$(cat <<PROMPT
@@ -333,23 +302,32 @@ while true; do
   done
   wait
 
-  # --- Refining issues ---
-  refining_issues=$(get_refining_issues)
-  refining_count=$(echo "$refining_issues" | jq 'length')
+  # --- Refining issues (single query with comments) ---
+  all_refining=$(get_issues_by_board_status_with_comments "Refining")
+  refining_count=$(echo "$all_refining" | jq 'length')
   echo "[refiner] Found $refining_count refining issue(s)"
 
+  # Filter locally: only issues where refiner commented AND human replied last
+  actionable=$(echo "$all_refining" | jq --arg marker "$REFINER_MARKER" '
+    [.[] | select(
+      (.comments | map(select(contains($marker))) | length > 0) and
+      (.last_comment | contains($marker) | not)
+    )]')
+  actionable_count=$(echo "$actionable" | jq 'length')
+  skipped=$((refining_count - actionable_count))
+  echo "[refiner] $actionable_count need response, $skipped waiting for human"
+
   running=0
-  echo "$refining_issues" | jq -c '.[]' | while read -r item; do
+  echo "$actionable" | jq -c '.[]' | while read -r item; do
     number=$(echo "$item" | jq -r '.number')
-    if last_comment_is_human "$number"; then
-      continue_refinement "$number" &
-      running=$((running + 1))
-      if [[ "$running" -ge "$REFINER_PARALLEL" ]]; then
-        wait -n 2>/dev/null || wait
-        running=$((running - 1))
-      fi
-    else
-      echo "[refiner] Skipping #$number — waiting for human response"
+    title=$(echo "$item" | jq -r '.title')
+    body=$(echo "$item" | jq -r '.body')
+    comments_json=$(echo "$item" | jq -c '.comments')
+    continue_refinement "$number" "$title" "$body" "$comments_json" &
+    running=$((running + 1))
+    if [[ "$running" -ge "$REFINER_PARALLEL" ]]; then
+      wait -n 2>/dev/null || wait
+      running=$((running - 1))
     fi
   done
   wait
