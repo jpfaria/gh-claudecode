@@ -166,8 +166,19 @@ check_stale() {
 
   if [[ -z "$start_comment" ]]; then
     echo "[solver] No '[solver] Started at' comment found for #$number — marking as failed"
+    local no_ts_log="$LOG_DIR/issue-${number}.log"
+    local no_ts_gist=""
+    if [[ -f "$no_ts_log" ]] && [[ -s "$no_ts_log" ]]; then
+      no_ts_gist=$(upload_log_gist "$number" "$no_ts_log" "[solver] no timestamp partial log")
+    fi
+    local no_ts_link=""
+    if [[ -n "$no_ts_gist" ]]; then
+      no_ts_link="
+
+[Partial claude output log]($no_ts_gist)"
+    fi
     set_issue_status "$number" "Failed" "failed"
-    gh issue comment "$number" --repo "$REPO" --body "[solver] Marked as failed: no start timestamp found."
+    gh issue comment "$number" --repo "$REPO" --body "[solver] **Marked as failed**: no start timestamp found.$no_ts_link"
     return
   fi
 
@@ -196,8 +207,21 @@ check_stale() {
       git -C "$REPO_DIR" worktree remove "$WORKTREE_DIR/issue-$number" --force || true
     fi
 
+    # Upload partial log if exists
+    local stale_log="$LOG_DIR/issue-${number}.log"
+    local stale_gist=""
+    if [[ -f "$stale_log" ]] && [[ -s "$stale_log" ]]; then
+      stale_gist=$(upload_log_gist "$number" "$stale_log" "[solver] timeout partial log")
+    fi
+    local stale_log_link=""
+    if [[ -n "$stale_gist" ]]; then
+      stale_log_link="
+
+[Partial claude output log]($stale_gist)"
+    fi
+
     set_issue_status "$number" "Failed" "failed"
-    gh issue comment "$number" --repo "$REPO" --body "[solver] Marked as failed: timed out after ${elapsed}s (limit: ${SOLVER_TIMEOUT}s)."
+    gh issue comment "$number" --repo "$REPO" --body "[solver] **Marked as failed**: timed out after ${elapsed}s (limit: ${SOLVER_TIMEOUT}s).$stale_log_link"
   else
     echo "[solver] Issue #$number still within timeout (${elapsed}s / ${SOLVER_TIMEOUT}s)"
   fi
