@@ -98,7 +98,7 @@ fi
 ensure_labels() {
   local repo="$1"
   local label color
-  local pairs="refining:fbca04 ready:0e8a16 approved:1d76db in-progress:d93f0b done:0e8a16 failed:b60205"
+  local pairs="refining:fbca04 ready:0e8a16 approved:1d76db in-progress:d93f0b in-review:e4e669 done:0e8a16 failed:b60205"
   local existing
   existing=$(gh label list --repo "$repo" --json name -q ".[].name")
 
