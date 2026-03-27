@@ -114,15 +114,58 @@ mkdir -p "$REFINER_LOG_DIR"
 
 
 
-# Get new issues: no board status and no workflow labels
+# Get new issues: board status is empty/null (not in any column yet)
 get_new_issues() {
-  local skip_labels="refining ready approved in-progress done failed system"
-  gh issue list --repo "$REPO" --state open --json number,title,labels --limit 100 \
-    | jq --arg skip "$skip_labels" '
-      ($skip | split(" ")) as $skip_list |
-      [.[] | select(
-        (.labels | map(.name) | map(select(. as $l | $skip_list | index($l))) | length) == 0
-      ) | {number, title}]'
+  if [[ -z "$PROJECT_ID" ]]; then
+    # Fallback to label-based detection
+    local skip_labels="refining ready approved in-progress in-review done failed system"
+    gh issue list --repo "$REPO" --state open --json number,title,labels --limit 100 \
+      | jq --arg skip "$skip_labels" '
+        ($skip | split(" ")) as $skip_list |
+        [.[] | select(
+          (.labels | map(.name) | map(select(. as $l | $skip_list | index($l))) | length) == 0
+        ) | {number, title}]'
+    return
+  fi
+
+  # Use board: only issues with no status or "New" status
+  local owner="${REPO%%/*}"
+  local project_number="${PROJECT_NUMBER:-1}"
+  local raw
+  raw=$(gh api graphql -f query="
+  {
+    user(login: \"$owner\") {
+      projectV2(number: $project_number) {
+        items(first: 100) {
+          nodes {
+            fieldValueByName(name: \"Status\") {
+              ... on ProjectV2ItemFieldSingleSelectValue { name }
+            }
+            content {
+              ... on Issue {
+                number
+                title
+                state
+                labels(first: 10) { nodes { name } }
+              }
+            }
+          }
+        }
+      }
+    }
+  }" 2>&1) || true
+
+  if ! echo "$raw" | jq empty 2>/dev/null; then
+    echo "[]"
+    return
+  fi
+
+  echo "$raw" | jq '
+    [.data.user.projectV2.items.nodes[]
+     | select(.content.state == "OPEN")
+     | select((.fieldValueByName.name == null) or (.fieldValueByName.name == "") or (.fieldValueByName.name == "New"))
+     | select((.content.labels.nodes | map(.name) | index("system")) | not)
+     | {number: .content.number, title: .content.title}]'
 }
 
 
