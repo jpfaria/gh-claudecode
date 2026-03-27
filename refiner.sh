@@ -140,7 +140,7 @@ start_refinement() {
   echo "[refiner] Starting refinement for issue #$number: $title"
 
   # Set label FIRST to prevent duplicate processing
-  set_issue_status "$number" "Refining" "refining"
+  set_issue_status "$number" "Business Refining" "refining"
 
   local body
   body=$(gh issue view "$number" --repo "$REPO" --json body -q '.body')
@@ -420,7 +420,7 @@ while true; do
   done
 
   # --- Refining issues (single query with comments) ---
-  all_refining=$(get_issues_by_board_status_with_comments "Refining")
+  all_refining=$(get_issues_by_board_status_with_comments "Business Refining")
   refining_count=$(echo "$all_refining" | jq 'length')
   echo "[refiner] Found $refining_count refining issue(s)"
 

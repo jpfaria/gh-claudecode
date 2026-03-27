@@ -155,20 +155,22 @@ If `--repo-dir` is not provided, the solver clones the repo into `worktrees/_rep
 Agents control state via labels. The GitHub Project Board is for human visualization only.
 
 ```
-(new issue) → refining → ready → approved → in-progress → done
-                                     ↓
-                                   failed
+(new) → refining → ready → TODO → in-progress → in-review → done
+                                       ↓              ↓
+                                     failed          failed
 ```
 
-| Label | Color | Meaning | Set by |
-|-------|-------|---------|--------|
-| *(none)* | — | New issue, needs refinement | Human |
-| `refining` | 🟢 `#0E8A16` | Refiner is interacting | Refiner |
-| `ready` | 🔵 `#1D76DB` | Checklist complete | Refiner |
-| `approved` | 🟣 `#5319E7` | Approved for implementation | Human |
-| `in-progress` | 🟡 `#FBCA04` | Solver working | Solver |
-| `done` | 🟢 `#0E8A16` | PR created | Solver |
-| `failed` | 🔴 `#D93F0B` | Timeout or error | Solver |
+| Label | Board Status | Meaning | Set by |
+|-------|-------------|---------|--------|
+| *(none)* | New | Issue created, not yet processed | Human |
+| `refining` | Business Refining | Refiner interviewing user | Refiner |
+| `ready` | Ready | Checklist complete, awaiting approval | Refiner |
+| `approved` | TODO | Approved for implementation | Human |
+| `in-progress` | In Progress | Solver working | Solver |
+| `in-review` | In Review | PR created, awaiting review | Solver |
+| `done` | Done | PR merged | Solver |
+| `failed` | Failed | Timeout or error | Solver |
+| `system` | — | System-generated, refiner ignores | System |
 
 ## Issue Checklist
 

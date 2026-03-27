@@ -139,7 +139,7 @@ release_lock() {
 
 
 get_approved_issues() {
-  get_issues_by_board_status_with_comments "Approved"
+  get_issues_by_board_status_with_comments "TODO"
 }
 
 get_in_progress_issues() {

@@ -18,7 +18,7 @@ normalize_repo() {
 REQUIRED_LABELS="refining:fbca04 ready:0e8a16 approved:1d76db in-progress:d93f0b in-review:e4e669 done:0e8a16 failed:b60205 system:c5def5"
 
 # All required board status options with colors
-REQUIRED_STATUSES="Refining:ORANGE Ready:BLUE Approved:PURPLE In_Progress:YELLOW In_Review:PINK Done:GREEN Failed:RED"
+REQUIRED_STATUSES="New:GRAY Business_Refining:ORANGE Ready:BLUE TODO:PURPLE In_Progress:YELLOW In_Review:PINK Done:GREEN Failed:RED"
 
 ensure_project_ready() {
   local repo="$1"
@@ -267,7 +267,7 @@ add_issue_to_project() {
 
 # Set the Status field on a project item
 # Usage: set_project_status <issue_number> <status_name>
-# status_name: "New", "Refining", "Ready", "Approved", "In Progress", "Done", "Failed"
+# status_name: "New", "Business Refining", "Ready", "TODO", "In Progress", "Done", "Failed"
 set_project_status() {
   local issue_number="$1"
   local status_name="$2"
@@ -319,7 +319,7 @@ set_project_status() {
 }
 
 # Get issues from the Project Board by status name
-# Usage: get_issues_by_board_status "Refining"
+# Usage: get_issues_by_board_status "Business Refining"
 # Returns JSON array: [{"number": 1, "title": "...", "item_id": "..."}]
 get_issues_by_board_status() {
   local target_status="$1"
@@ -371,7 +371,7 @@ get_issues_by_board_status() {
 }
 
 # Get issues from board with comments included (single query, avoids N+1)
-# Usage: get_issues_by_board_status_with_comments "Refining"
+# Usage: get_issues_by_board_status_with_comments "Business Refining"
 # Returns JSON array with number, title, item_id, comments (last 5 bodies)
 get_issues_by_board_status_with_comments() {
   local target_status="$1"
