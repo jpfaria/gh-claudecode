@@ -314,17 +314,11 @@ $issue_comments
 PROMPT_EOF
 )
 
-  # Run claude — capture output for error reporting
+  # Run claude — capture output to LOG_DIR (accessible by check_stale)
   echo "[solver] Running claude on worktree $wt_dir"
-  local claude_log="$wt_dir/.claude-output.log"
+  local claude_log="$LOG_DIR/issue-${number}.log"
   local claude_exit=0
   (cd "$wt_dir" && echo "$prompt" | claude --model "$CLAUDE_MODEL" -p 2>&1 | tee "$claude_log") || claude_exit=$?
-
-  # Truncate log for comment (last 50 lines, max 3000 chars)
-  local log_tail=""
-  if [[ -f "$claude_log" ]]; then
-    log_tail=$(tail -50 "$claude_log" | head -c 3000)
-  fi
 
   # Upload log as gist
   local gist_url=""
@@ -521,7 +515,7 @@ $inline_comments
 RETRY_EOF
 )
 
-        local claude_log="$wt_dir/.claude-retry-output.log"
+        local claude_log="$LOG_DIR/issue-${number}.log"
         local claude_exit=0
         (cd "$wt_dir" && echo "$retry_prompt" | claude --model "$CLAUDE_MODEL" -p 2>&1 | tee "$claude_log") || claude_exit=$?
 
@@ -609,10 +603,9 @@ while true; do
     body=$(echo "$item" | jq -r '.body')
     comments_json=$(echo "$item" | jq -c '.comments')
 
-    issue_log="$LOG_DIR/issue-${number}.log"
-    echo "[solver] Starting issue #$number — $title (log: $issue_log)"
+    echo "[solver] Starting issue #$number — $title (log: $LOG_DIR/issue-${number}.log)"
 
-    (solve_issue "$number" "$title" "$body" "$comments_json" 2>&1 | tee "$issue_log") &
+    solve_issue "$number" "$title" "$body" "$comments_json" &
     running=$((running + 1))
     if [[ "$running" -ge "$SOLVER_PARALLEL" ]]; then
       wait -n 2>/dev/null || wait

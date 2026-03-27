@@ -14,6 +14,7 @@ source "$SCRIPT_DIR/lib.sh"
 
 # Default values
 REPO="${REPO:-}"
+REPO_DIR="${REPO_DIR:-}"
 PROJECT_NUMBER="${PROJECT_NUMBER:-1}"
 REFINER_INTERVAL="${REFINER_INTERVAL:-300}"
 REFINER_PARALLEL="${REFINER_PARALLEL:-5}"
@@ -40,6 +41,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --project)
       PROJECT_NUMBER="$2"
+      shift 2
+      ;;
+    --repo-dir)
+      REPO_DIR="$2"
       shift 2
       ;;
     *)
@@ -95,8 +100,12 @@ else
   echo "[refiner] Warning: no CLAUDE.md found in $REPO"
 fi
 
-# Log directory
-REFINER_LOG_DIR="/tmp/gh-claudecode-refiner-logs"
+# Log directory (in target repo if --repo-dir provided, otherwise /tmp)
+if [[ -n "$REPO_DIR" ]]; then
+  REFINER_LOG_DIR="$REPO_DIR/.logs"
+else
+  REFINER_LOG_DIR="/tmp/gh-claudecode-refiner-logs"
+fi
 mkdir -p "$REFINER_LOG_DIR"
 
 # ---------------------------------------------------------------------------
