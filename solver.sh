@@ -358,8 +358,9 @@ PROMPT_EOF
     return
   fi
 
-  # Push branch
+  # Pull + Push branch
   echo "[solver] Pushing branch $branch"
+  git -C "$wt_dir" pull --rebase origin "$branch" 2>/dev/null || true
   git -C "$wt_dir" push -u origin "$branch"
 
   # Create PR
@@ -542,6 +543,7 @@ Retry failed: claude exited with code $claude_exit.$log_link"
           continue
         fi
 
+        git -C "$wt_dir" pull --rebase origin "$branch" 2>/dev/null || true
         git -C "$wt_dir" push origin "$branch" 2>/dev/null
 
         gh pr comment "$pr_number" --repo "$REPO" --body "${SOLVER_MARKER}
