@@ -555,8 +555,8 @@ init_project_board || true
 # Main polling loop
 # ---------------------------------------------------------------------------
 
-# Log directory
-LOG_DIR="$SCRIPT_DIR/.logs"
+# Log directory inside target repo
+LOG_DIR="$REPO_DIR/.logs"
 mkdir -p "$LOG_DIR"
 
 while true; do
