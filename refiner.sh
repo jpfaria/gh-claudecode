@@ -314,7 +314,7 @@ Split from #$number" 2>/dev/null)
     fi
 
     # Update original issue
-    set_issue_status "$number" "Ready" "ready" "refining"
+    set_issue_status "$number" "Ready" "ready"
     gh issue comment "$number" --repo "$REPO" --body "${REFINER_MARKER}
 This issue has been split into independent sub-issues:
 
@@ -340,7 +340,7 @@ Each sub-issue has a complete specification and is ready for development."
 ${checklist}"
 
     # Set status FIRST to prevent duplicate processing
-    set_issue_status "$number" "Ready" "ready" "refining"
+    set_issue_status "$number" "Ready" "ready"
     gh issue edit "$number" --repo "$REPO" --body "$new_body"
     gh issue comment "$number" --repo "$REPO" --body "${REFINER_MARKER}
 Refinement complete. All checklist items have been filled. This issue is now **ready** for development."

@@ -181,7 +181,7 @@ check_stale() {
 
   if [[ -z "$start_comment" ]]; then
     echo "[solver] No '[solver] Started at' comment found for #$number — marking as failed"
-    set_issue_status "$number" "Failed" "failed" "in-progress"
+    set_issue_status "$number" "Failed" "failed"
     gh issue comment "$number" --repo "$REPO" --body "[solver] Marked as failed: no start timestamp found."
     return
   fi
@@ -211,7 +211,7 @@ check_stale() {
       git -C "$REPO_DIR" worktree remove "$WORKTREE_DIR/issue-$number" --force || true
     fi
 
-    set_issue_status "$number" "Failed" "failed" "in-progress"
+    set_issue_status "$number" "Failed" "failed"
     gh issue comment "$number" --repo "$REPO" --body "[solver] Marked as failed: timed out after ${elapsed}s (limit: ${SOLVER_TIMEOUT}s)."
   else
     echo "[solver] Issue #$number still within timeout (${elapsed}s / ${SOLVER_TIMEOUT}s)"
@@ -234,7 +234,7 @@ solve_issue() {
   echo "[solver] Solving issue #$number — $title"
 
   # Swap status: approved -> in-progress
-  set_issue_status "$number" "In Progress" "in-progress" "approved"
+  set_issue_status "$number" "In Progress" "in-progress"
 
   # Comment with start timestamp
   local start_ts
@@ -328,7 +328,7 @@ PROMPT_EOF
 
   if [[ "$claude_exit" -ne 0 ]]; then
     echo "[solver] Claude failed with exit code $claude_exit for #$number"
-    set_issue_status "$number" "Failed" "failed" "in-progress"
+    set_issue_status "$number" "Failed" "failed"
     gh issue comment "$number" --repo "$REPO" --body "[solver] **Failed**: claude exited with code $claude_exit.$log_link"
     git -C "$REPO_DIR" worktree remove "$wt_dir" --force || true
     return
@@ -340,7 +340,7 @@ PROMPT_EOF
 
   if [[ "$commit_count" -eq 0 ]]; then
     echo "[solver] No commits made for #$number — marking as failed"
-    set_issue_status "$number" "Failed" "failed" "in-progress"
+    set_issue_status "$number" "Failed" "failed"
     gh issue comment "$number" --repo "$REPO" --body "[solver] **Failed**: claude produced no commits.$log_link"
     git -C "$REPO_DIR" worktree remove "$wt_dir" --force || true
     return
@@ -362,7 +362,7 @@ PR_EOF
   echo "[solver] PR created: $pr_url"
 
   # Move to In Review — worktree stays alive for potential retry
-  set_issue_status "$number" "In Review" "in-review" "in-progress"
+  set_issue_status "$number" "In Review" "in-review"
 
   # Comment with PR URL
   gh issue comment "$number" --repo "$REPO" --body "[solver] PR created: $pr_url — awaiting review.$log_link"
@@ -414,7 +414,7 @@ check_reviews() {
 
     if [[ "$pr_state" == "MERGED" ]]; then
       echo "[solver] PR #$pr_number merged for issue #$number"
-      set_issue_status "$number" "Done" "done" "in-review"
+      set_issue_status "$number" "Done" "done"
       gh issue comment "$number" --repo "$REPO" --body "[solver] PR #$pr_number merged. Done!"
       # Cleanup worktree
       if [[ -d "$wt_dir" ]]; then
@@ -423,7 +423,7 @@ check_reviews() {
 
     elif [[ "$pr_state" == "CLOSED" ]]; then
       echo "[solver] PR #$pr_number closed without merge for issue #$number"
-      set_issue_status "$number" "Failed" "failed" "in-review"
+      set_issue_status "$number" "Failed" "failed"
       gh issue comment "$number" --repo "$REPO" --body "[solver] PR #$pr_number was closed without merge. Marked as failed."
       if [[ -d "$wt_dir" ]]; then
         git -C "$REPO_DIR" worktree remove "$wt_dir" --force 2>/dev/null || true
@@ -463,7 +463,7 @@ check_reviews() {
       if [[ "$has_feedback" == "true" ]]; then
         echo "[solver] Human feedback on PR #$pr_number for issue #$number — retrying"
 
-        set_issue_status "$number" "In Progress" "in-progress" "in-review"
+        set_issue_status "$number" "In Progress" "in-progress"
 
         # Collect all human PR comments
         local pr_comments_text
@@ -523,7 +523,7 @@ RETRY_EOF
           echo "[solver] Claude retry failed for #$number (exit $claude_exit)"
           gh pr comment "$pr_number" --repo "$REPO" --body "${SOLVER_MARKER}
 Retry failed: claude exited with code $claude_exit.$log_link"
-          set_issue_status "$number" "In Review" "in-review" "in-progress"
+          set_issue_status "$number" "In Review" "in-review"
           continue
         fi
 
@@ -532,7 +532,7 @@ Retry failed: claude exited with code $claude_exit.$log_link"
         gh pr comment "$pr_number" --repo "$REPO" --body "${SOLVER_MARKER}
 Feedback addressed. Please re-review.$log_link"
 
-        set_issue_status "$number" "In Review" "in-review" "in-progress"
+        set_issue_status "$number" "In Review" "in-review"
         echo "[solver] Pushed fixes for PR #$pr_number"
 
       else

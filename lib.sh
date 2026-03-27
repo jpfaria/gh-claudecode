@@ -437,21 +437,25 @@ get_issues_by_board_status_with_comments() {
        }]'
 }
 
+# All workflow labels (used for cleanup)
+ALL_WORKFLOW_LABELS="refining ready approved in-progress in-review done failed"
+
 # Set both board status AND label in one call
+# Removes ALL other workflow labels before adding the new one
 # Usage: set_issue_status <issue_number> <status_name> <label_name>
 set_issue_status() {
   local issue_number="$1"
   local board_status="$2"
   local label="$3"
-  local old_label="${4:-}"
 
   # Update board
   set_project_status "$issue_number" "$board_status"
 
-  # Update labels
-  if [[ -n "$old_label" ]]; then
-    gh issue edit "$issue_number" --repo "$REPO" --remove-label "$old_label" --add-label "$label" 2>/dev/null || true
-  else
-    gh issue edit "$issue_number" --repo "$REPO" --add-label "$label" 2>/dev/null || true
-  fi
+  # Remove all workflow labels, then add the new one
+  for old in $ALL_WORKFLOW_LABELS; do
+    if [[ "$old" != "$label" ]]; then
+      gh issue edit "$issue_number" --repo "$REPO" --remove-label "$old" 2>/dev/null || true
+    fi
+  done
+  gh issue edit "$issue_number" --repo "$REPO" --add-label "$label" 2>/dev/null || true
 }
