@@ -300,7 +300,7 @@ $issue_comments
 2. Implement the solution for this issue.
 3. Follow all coding conventions described in the project.
 4. Make sure the code compiles/runs without errors or warnings.
-5. Commit your changes with a message that includes "Closes #$number".
+5. Commit your changes with a message that references "issue #$number" (do NOT use "Closes" or "Fixes" — the issue will be closed manually).
 6. Do NOT push — the automation will handle pushing.
 PROMPT_EOF
 )
@@ -343,7 +343,7 @@ PROMPT_EOF
     echo "[solver] PR already exists: $pr_url"
   else
     pr_url=$(gh pr create --repo "$REPO" --head "$branch" --base "$base_branch" --title "$title" --body "$(cat <<PR_EOF
-Closes #$number
+Related to #$number
 
 Automated by gh-claudecode solver.
 PR_EOF
@@ -384,7 +384,7 @@ check_reviews() {
     # Find the PR for this issue
     local pr_json
     pr_json=$(gh pr list --repo "$REPO" --json number,state,reviewDecision,headRefName \
-      --search "Closes #$number" --limit 1 2>/dev/null)
+      --search "issue #$number" --limit 1 2>/dev/null)
 
     local pr_count
     pr_count=$(echo "$pr_json" | jq 'length')
