@@ -640,8 +640,6 @@ while true; do
       fi
     fi
 
-    # Clean issue logs for next cycle
-    rm -f "$LOG_DIR"/issue-*.log
   fi
 
   # --- In-progress issues (stale check — after processing approved) ---
