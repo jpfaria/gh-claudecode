@@ -14,6 +14,7 @@ source "$SCRIPT_DIR/lib.sh"
 
 # Default values
 REPO="${REPO:-}"
+PROJECT_NUMBER="${PROJECT_NUMBER:-1}"
 REFINER_INTERVAL="${REFINER_INTERVAL:-300}"
 REFINER_PARALLEL="${REFINER_PARALLEL:-5}"
 CLAUDE_MODEL="${CLAUDE_MODEL:-claude-sonnet-4-6}"
@@ -35,6 +36,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --parallel)
       REFINER_PARALLEL="$2"
+      shift 2
+      ;;
+    --project)
+      PROJECT_NUMBER="$2"
       shift 2
       ;;
     *)
@@ -94,24 +99,7 @@ fi
 # Functions
 # ---------------------------------------------------------------------------
 
-# Ensure the 6 workflow labels exist in the target repo
-ensure_labels() {
-  local repo="$1"
-  local label color
-  local pairs="refining:fbca04 ready:0e8a16 approved:1d76db in-progress:d93f0b in-review:e4e669 done:0e8a16 failed:b60205"
-  local existing
-  existing=$(gh label list --repo "$repo" --json name -q ".[].name")
 
-  for pair in $pairs; do
-    label="${pair%%:*}"
-    color="${pair##*:}"
-    if ! echo "$existing" | grep -qx "$label"; then
-      echo "[refiner] Creating label '$label' in $repo"
-      gh label create "$label" --repo "$repo" --color "$color" --description "Auto-created by refiner" || true
-    fi
-  done
-  echo "[refiner] All required labels verified"
-}
 
 # Get new issues: no board status and no workflow labels
 get_new_issues() {
@@ -374,7 +362,7 @@ ${response}"
 # Startup
 # ---------------------------------------------------------------------------
 
-ensure_labels "$REPO"
+ensure_project_ready "$REPO"
 init_project_board || true
 
 # ---------------------------------------------------------------------------

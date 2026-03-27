@@ -11,6 +11,146 @@ normalize_repo() {
 }
 
 # ---------------------------------------------------------------------------
+# Project readiness check — run once at startup
+# ---------------------------------------------------------------------------
+
+# All required labels with colors
+REQUIRED_LABELS="refining:fbca04 ready:0e8a16 approved:1d76db in-progress:d93f0b in-review:e4e669 done:0e8a16 failed:b60205 system:c5def5"
+
+# All required board status options with colors
+REQUIRED_STATUSES="Refining:ORANGE Ready:BLUE Approved:PURPLE In_Progress:YELLOW In_Review:PINK Done:GREEN Failed:RED"
+
+ensure_project_ready() {
+  local repo="$1"
+  local owner="${repo%%/*}"
+
+  echo "[lib] Ensuring project $repo is ready..."
+
+  # --- 1. Verify repo access ---
+  if ! gh repo view "$repo" --json name &>/dev/null; then
+    echo "[lib] Error: cannot access repo $repo" >&2
+    return 1
+  fi
+  echo "[lib] ✓ Repo accessible"
+
+  # --- 2. Verify gitflow (main + develop branches) ---
+  local has_main has_develop
+  has_main=$(gh api "repos/$repo/branches/main" --jq '.name' 2>/dev/null || echo "")
+  has_develop=$(gh api "repos/$repo/branches/develop" --jq '.name' 2>/dev/null || echo "")
+
+  if [[ -z "$has_main" ]]; then
+    echo "[lib] Warning: branch 'main' not found in $repo"
+  else
+    echo "[lib] ✓ Branch main exists"
+  fi
+
+  if [[ -z "$has_develop" ]]; then
+    echo "[lib] Warning: branch 'develop' not found in $repo — solver will use main as base"
+  else
+    echo "[lib] ✓ Branch develop exists"
+  fi
+
+  # --- 3. Ensure labels ---
+  local existing_labels
+  existing_labels=$(gh label list --repo "$repo" --json name -q ".[].name" 2>/dev/null)
+
+  local label_descriptions="refining:Refiner is interacting with human ready:Checklist complete, awaiting approval approved:Approved for implementation in-progress:Solver is working on it in-review:PR created, awaiting review done:PR merged failed:Solver timed out or failed system:System-generated issue"
+
+  for pair in $REQUIRED_LABELS; do
+    local label="${pair%%:*}"
+    local color="${pair##*:}"
+    if ! echo "$existing_labels" | grep -qx "$label"; then
+      gh label create "$label" --repo "$repo" --color "$color" --description "Auto-created by gh-claudecode" 2>/dev/null || true
+      echo "[lib] ✓ Created label '$label'"
+    fi
+  done
+  echo "[lib] ✓ All labels verified"
+
+  # --- 4. Ensure Project Board statuses ---
+  local project_number="${PROJECT_NUMBER:-1}"
+  local project_json
+  project_json=$(gh api graphql -f query="
+  {
+    user(login: \"$owner\") {
+      projectV2(number: $project_number) {
+        id
+        fields(first: 20) {
+          nodes {
+            ... on ProjectV2SingleSelectField {
+              id
+              name
+              options { id name }
+            }
+          }
+        }
+      }
+    }
+  }" 2>/dev/null) || true
+
+  if [[ -z "$project_json" ]] || ! echo "$project_json" | jq empty 2>/dev/null; then
+    echo "[lib] Warning: could not access Project Board #$project_number — board sync disabled"
+    return 0
+  fi
+
+  local project_id
+  project_id=$(echo "$project_json" | jq -r '.data.user.projectV2.id // empty')
+  if [[ -z "$project_id" ]]; then
+    echo "[lib] Warning: Project Board #$project_number not found"
+    return 0
+  fi
+
+  local status_field_id
+  status_field_id=$(echo "$project_json" | jq -r '.data.user.projectV2.fields.nodes[] | select(.name == "Status") | .id // empty')
+
+  local existing_statuses
+  existing_statuses=$(echo "$project_json" | jq -r '.data.user.projectV2.fields.nodes[] | select(.name == "Status") | [.options[].name] | join(",")')
+
+  # Check if all required statuses exist
+  local missing=false
+  for pair in $REQUIRED_STATUSES; do
+    local status_name="${pair%%:*}"
+    status_name="${status_name//_/ }"
+    if ! echo ",$existing_statuses," | grep -qF ",$status_name,"; then
+      missing=true
+      echo "[lib] Missing board status: $status_name"
+    fi
+  done
+
+  if [[ "$missing" == "true" ]] && [[ -n "$status_field_id" ]]; then
+    echo "[lib] Creating missing board statuses..."
+    # Build full options list
+    local options_json="["
+    local first=true
+    for pair in $REQUIRED_STATUSES; do
+      local status_name="${pair%%:*}"
+      local status_color="${pair##*:}"
+      status_name="${status_name//_/ }"
+      if [[ "$first" == "true" ]]; then first=false; else options_json+=","; fi
+      options_json+="{ \"name\": \"$status_name\", \"color\": \"$status_color\", \"description\": \"\" }"
+    done
+    options_json+="]"
+
+    gh api graphql -f query="
+    mutation {
+      updateProjectV2Field(input: {
+        fieldId: \"$status_field_id\"
+        singleSelectOptions: $options_json
+      }) {
+        projectV2Field {
+          ... on ProjectV2SingleSelectField {
+            options { id name }
+          }
+        }
+      }
+    }" >/dev/null 2>&1 && echo "[lib] ✓ Board statuses updated" || echo "[lib] Warning: could not update board statuses"
+  else
+    echo "[lib] ✓ All board statuses verified"
+  fi
+
+  echo "[lib] Project $repo is ready"
+}
+
+# ---------------------------------------------------------------------------
 # Project Board sync
 # ---------------------------------------------------------------------------
 

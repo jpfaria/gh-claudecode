@@ -15,6 +15,7 @@ source "$SCRIPT_DIR/lib.sh"
 # Default values
 REPO="${REPO:-}"
 REPO_DIR="${REPO_DIR:-}"
+PROJECT_NUMBER="${PROJECT_NUMBER:-1}"
 SOLVER_INTERVAL="${SOLVER_INTERVAL:-600}"
 SOLVER_TIMEOUT="${SOLVER_TIMEOUT:-3600}"
 SOLVER_PARALLEL="${SOLVER_PARALLEL:-3}"
@@ -42,6 +43,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --model)
       CLAUDE_MODEL="$2"
+      shift 2
+      ;;
+    --project)
+      PROJECT_NUMBER="$2"
       shift 2
       ;;
     --repo-dir)
@@ -543,6 +548,7 @@ Feedback addressed. Please re-review.$log_link"
 
 echo "[solver] Starting for $REPO (interval: ${SOLVER_INTERVAL}s, timeout: ${SOLVER_TIMEOUT}s, parallel: ${SOLVER_PARALLEL}, model: $CLAUDE_MODEL)"
 
+ensure_project_ready "$REPO"
 init_project_board || true
 
 # ---------------------------------------------------------------------------
