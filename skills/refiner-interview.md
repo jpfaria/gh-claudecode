@@ -147,6 +147,45 @@ As a [persona], I want [action], so that [benefit].
 - **Complexity estimate** — [S/M/L/XL]
 ```
 
+If the request should be split into multiple independent issues, respond with:
+
+```
+SPLIT_ISSUES
+---
+ISSUE: [title of sub-issue 1]
+[full CHECKLIST_COMPLETE body for sub-issue 1]
+---
+ISSUE: [title of sub-issue 2]
+[full CHECKLIST_COMPLETE body for sub-issue 2]
+---
+ISSUE: [title of sub-issue N]
+[full CHECKLIST_COMPLETE body for sub-issue N]
+```
+
+Each sub-issue gets a complete checklist (functional + technical). The original issue will be updated to reference all sub-issues.
+
+---
+
+## Splitting issues
+
+When the user's request contains **multiple independent items** that can be implemented separately and in parallel, the refiner should:
+
+1. **Identify** the independent pieces during the interview
+2. **Confirm with the user**: "I see this could be split into N separate tasks: [list]. That way they can be worked on independently. Do you agree?"
+3. **If user agrees**: complete the current issue with the first item, then create new issues for each additional item using `gh issue create`
+4. **Each new issue** gets its own full refinement (the refiner fills the checklist immediately since it already has the context)
+5. **Link the issues**: mention the parent issue in each child ("Split from #N")
+
+### Examples of splittable requests
+- "Add chorus effect" → Analog Chorus, Digital Chorus, Tri-Chorus (3 independent models)
+- "Improve delay block" → Add tap tempo, add ping-pong mode, add ducking (3 independent features)
+- "Fix audio issues" → Fix clipping on high gain, fix latency on reverb (2 independent bugs)
+
+### When NOT to split
+- Items that depend on each other (must be done in order)
+- Items so small they're not worth a separate issue
+- User explicitly says "do it all together"
+
 ---
 
 ## Anti-patterns — NEVER do this

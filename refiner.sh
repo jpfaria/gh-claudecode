@@ -272,7 +272,63 @@ PROMPT
   local first_line
   first_line=$(echo "$response" | head -n1)
 
-  if [[ "$first_line" == "CHECKLIST_COMPLETE" ]]; then
+  if [[ "$first_line" == "SPLIT_ISSUES" ]]; then
+    echo "[refiner] Splitting issue #$number into sub-issues"
+
+    # Parse sub-issues from response (split by "---\nISSUE:")
+    local sub_issues
+    sub_issues=$(echo "$response" | sed '1,/^---$/d')
+
+    local created_refs=""
+    local sub_title="" sub_body=""
+    while IFS= read -r line; do
+      if [[ "$line" =~ ^ISSUE:\ (.+)$ ]]; then
+        # Save previous sub-issue if exists
+        if [[ -n "$sub_title" && -n "$sub_body" ]]; then
+          local new_url
+          new_url=$(gh issue create --repo "$REPO" --title "$sub_title" --body "${sub_body}
+
+---
+Split from #$number" 2>/dev/null)
+          local new_num
+          new_num=$(echo "$new_url" | grep -o '[0-9]*$')
+          echo "[refiner] Created sub-issue $new_url"
+          created_refs="${created_refs}- ${new_url}\n"
+          # Set as Refining + Ready immediately (already has full checklist)
+          set_issue_status "$new_num" "Ready" "ready"
+        fi
+        sub_title="${BASH_REMATCH[1]}"
+        sub_body=""
+      elif [[ "$line" != "---" ]]; then
+        sub_body="${sub_body}${line}
+"
+      fi
+    done <<< "$sub_issues"
+
+    # Save last sub-issue
+    if [[ -n "$sub_title" && -n "$sub_body" ]]; then
+      local new_url
+      new_url=$(gh issue create --repo "$REPO" --title "$sub_title" --body "${sub_body}
+
+---
+Split from #$number" 2>/dev/null)
+      echo "[refiner] Created sub-issue $new_url"
+      created_refs="${created_refs}- ${new_url}\n"
+      local new_num
+      new_num=$(echo "$new_url" | grep -o '[0-9]*$')
+      set_issue_status "$new_num" "Ready" "ready"
+    fi
+
+    # Update original issue
+    set_issue_status "$number" "Ready" "ready" "refining"
+    gh issue comment "$number" --repo "$REPO" --body "${REFINER_MARKER}
+This issue has been split into independent sub-issues:
+
+$(echo -e "$created_refs")
+Each sub-issue has a complete specification and is ready for development."
+    echo "[refiner] Issue #$number split completed"
+
+  elif [[ "$first_line" == "CHECKLIST_COMPLETE" ]]; then
     echo "[refiner] Checklist complete for issue #$number, transitioning to ready"
 
     # Extract checklist (everything after the first ---)
