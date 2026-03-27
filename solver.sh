@@ -137,21 +137,6 @@ release_lock() {
 # Functions
 # ---------------------------------------------------------------------------
 
-# Upload log file as gist, return URL
-upload_log_gist() {
-  local number="$1"
-  local log_file="$2"
-  local description="$3"
-
-  if [[ ! -f "$log_file" ]] || [[ ! -s "$log_file" ]]; then
-    echo ""
-    return
-  fi
-
-  local gist_url
-  gist_url=$(gh gist create "$log_file" --desc "[solver] $description — issue #$number" --public 2>/dev/null | tail -1)
-  echo "$gist_url"
-}
 
 get_approved_issues() {
   get_issues_by_board_status_with_comments "Approved"
@@ -235,6 +220,9 @@ solve_issue() {
 
   # Swap status: approved -> in-progress
   set_issue_status "$number" "In Progress" "in-progress"
+
+  # Clear previous logs for this issue
+  rm -f "$LOG_DIR/issue-${number}.log"
 
   # Comment with start timestamp
   local start_ts
@@ -464,6 +452,9 @@ check_reviews() {
         echo "[solver] Human feedback on PR #$pr_number for issue #$number — retrying"
 
         set_issue_status "$number" "In Progress" "in-progress"
+
+        # Clear previous logs for this issue
+        rm -f "$LOG_DIR/issue-${number}.log"
 
         # Collect all human PR comments
         local pr_comments_text

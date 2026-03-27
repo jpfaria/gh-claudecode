@@ -95,6 +95,10 @@ else
   echo "[refiner] Warning: no CLAUDE.md found in $REPO"
 fi
 
+# Log directory
+REFINER_LOG_DIR="/tmp/gh-claudecode-refiner-logs"
+mkdir -p "$REFINER_LOG_DIR"
+
 # ---------------------------------------------------------------------------
 # Functions
 # ---------------------------------------------------------------------------
@@ -160,11 +164,20 @@ Reply ONLY with the comment text to be posted on the issue.
 PROMPT
   )
 
+  local claude_log="$REFINER_LOG_DIR/refiner-issue-${number}.log"
   local response
-  response=$(echo "$prompt" | claude --model "$CLAUDE_MODEL" -p 2>&1) || true
+  response=$(echo "$prompt" | claude --model "$CLAUDE_MODEL" -p 2>&1 | tee "$claude_log") || true
+
+  # Upload log as gist
+  local gist_url=""
+  gist_url=$(upload_log_gist "$number" "$claude_log" "[refiner] start refinement")
+  local log_link=""
+  if [[ -n "$gist_url" ]]; then
+    log_link=" | [log]($gist_url)"
+  fi
 
   if [[ -n "$response" ]]; then
-    echo "[refiner] Got response from claude, posting comment on #$number"
+    echo "[refiner] Got response from claude, posting comment on #$number$log_link"
     gh issue comment "$number" --repo "$REPO" --body "${REFINER_MARKER}
 ${response}"
     echo "[refiner] Issue #$number labeled 'refining' and comment posted"
@@ -249,8 +262,17 @@ Reply ONLY with the comment text (if still interviewing) or the CHECKLIST_COMPLE
 PROMPT
   )
 
+  local claude_log="$REFINER_LOG_DIR/refiner-issue-${number}.log"
   local response
-  response=$(echo "$prompt" | claude --model "$CLAUDE_MODEL" -p 2>&1) || true
+  response=$(echo "$prompt" | claude --model "$CLAUDE_MODEL" -p 2>&1 | tee "$claude_log") || true
+
+  # Upload log as gist
+  local gist_url=""
+  gist_url=$(upload_log_gist "$number" "$claude_log" "[refiner] continue refinement")
+  local log_link=""
+  if [[ -n "$gist_url" ]]; then
+    log_link=" | [log]($gist_url)"
+  fi
 
   if [[ -z "$response" ]]; then
     echo "[refiner] Error: empty response from claude for issue #$number" >&2

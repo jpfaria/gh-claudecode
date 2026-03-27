@@ -437,6 +437,22 @@ get_issues_by_board_status_with_comments() {
        }]'
 }
 
+# Upload log file as gist, return URL
+upload_log_gist() {
+  local number="$1"
+  local log_file="$2"
+  local description="$3"
+
+  if [[ ! -f "$log_file" ]] || [[ ! -s "$log_file" ]]; then
+    echo ""
+    return
+  fi
+
+  local gist_url
+  gist_url=$(gh gist create "$log_file" --desc "$description — issue #$number" --public 2>/dev/null | tail -1)
+  echo "$gist_url"
+}
+
 # All workflow labels (used for cleanup)
 ALL_WORKFLOW_LABELS="refining ready approved in-progress in-review done failed"
 
