@@ -138,6 +138,35 @@ release_lock() {
 # ---------------------------------------------------------------------------
 
 
+# Post execution log as gist and comment on issue
+# Usage: post_execution_log <number> <status> [extra_message]
+post_execution_log() {
+  local number="$1"
+  local exec_status="$2"
+  local extra_msg="${3:-}"
+
+  local issue_log="$LOG_DIR/issue-${number}.log"
+  if [[ ! -f "$issue_log" ]] || [[ ! -s "$issue_log" ]]; then
+    return
+  fi
+
+  local gist_url
+  gist_url=$(upload_log_gist "$number" "$issue_log" "[solver] execution log — $exec_status")
+  if [[ -n "$gist_url" ]]; then
+    local body="[solver] Execution log ($exec_status): $gist_url"
+    if [[ -n "$extra_msg" ]]; then
+      body="[solver] **$exec_status**: $extra_msg
+
+[Execution log]($gist_url)"
+    fi
+    gh issue comment "$number" --repo "$REPO" --body "$body" 2>/dev/null || true
+    echo "[solver] Log posted: $gist_url"
+
+    # Delete log after posting
+    rm -f "$issue_log"
+  fi
+}
+
 get_approved_issues() {
   get_issues_by_board_status_with_comments "TODO"
 }
@@ -166,19 +195,8 @@ check_stale() {
 
   if [[ -z "$start_comment" ]]; then
     echo "[solver] No '[solver] Started at' comment found for #$number — marking as failed"
-    local no_ts_log="$LOG_DIR/issue-${number}.log"
-    local no_ts_gist=""
-    if [[ -f "$no_ts_log" ]] && [[ -s "$no_ts_log" ]]; then
-      no_ts_gist=$(upload_log_gist "$number" "$no_ts_log" "[solver] no timestamp partial log")
-    fi
-    local no_ts_link=""
-    if [[ -n "$no_ts_gist" ]]; then
-      no_ts_link="
-
-[Partial claude output log]($no_ts_gist)"
-    fi
     set_issue_status "$number" "Failed" "failed"
-    gh issue comment "$number" --repo "$REPO" --body "[solver] **Marked as failed**: no start timestamp found.$no_ts_link"
+    post_execution_log "$number" "Failed" "no start timestamp found"
     return
   fi
 
@@ -212,21 +230,8 @@ check_stale() {
       fi
     fi
 
-    # Upload partial log if exists
-    local stale_log="$LOG_DIR/issue-${number}.log"
-    local stale_gist=""
-    if [[ -f "$stale_log" ]] && [[ -s "$stale_log" ]]; then
-      stale_gist=$(upload_log_gist "$number" "$stale_log" "[solver] timeout partial log")
-    fi
-    local stale_log_link=""
-    if [[ -n "$stale_gist" ]]; then
-      stale_log_link="
-
-[Partial claude output log]($stale_gist)"
-    fi
-
     set_issue_status "$number" "Failed" "failed"
-    gh issue comment "$number" --repo "$REPO" --body "[solver] **Marked as failed**: timed out after ${elapsed}s (limit: ${SOLVER_TIMEOUT}s).$stale_log_link"
+    post_execution_log "$number" "Failed" "timed out after ${elapsed}s (limit: ${SOLVER_TIMEOUT}s)"
   else
     echo "[solver] Issue #$number still within timeout (${elapsed}s / ${SOLVER_TIMEOUT}s)"
   fi
@@ -246,17 +251,10 @@ solve_issue() {
   fi
   trap 'release_lock "$number"' RETURN
 
-  # Setup log — archive previous log as gist before clearing
+  # Archive previous execution log before starting new run
   local issue_log="$LOG_DIR/issue-${number}.log"
-  if [[ -f "$issue_log" ]] && [[ -s "$issue_log" ]]; then
-    local prev_gist
-    prev_gist=$(upload_log_gist "$number" "$issue_log" "[solver] previous run log")
-    if [[ -n "$prev_gist" ]]; then
-      echo "[solver] Previous run log: $prev_gist"
-      gh issue comment "$number" --repo "$REPO" --body "[solver] Previous run log archived: $prev_gist" 2>/dev/null || true
-    fi
-  fi
-  : > "$issue_log"  # clear log for new run
+  post_execution_log "$number" "previous run"
+  : > "$issue_log"  # clear for new run
 
   echo "[solver] Solving issue #$number — $title" | tee -a "$issue_log"
 
@@ -340,23 +338,11 @@ PROMPT_EOF
   local claude_exit=0
   (cd "$wt_dir" && echo "$prompt" | claude --model "$CLAUDE_MODEL" -p 2>&1 | tee -a "$issue_log") || claude_exit=$?
 
-  # Upload log as gist
-  local gist_url=""
-  if [[ -f "$issue_log" ]]; then
-    gist_url=$(upload_log_gist "$number" "$issue_log" "[solver] claude output")
-  fi
-  local log_link=""
-  if [[ -n "$gist_url" ]]; then
-    log_link="
-
-[Full claude output log]($gist_url)"
-  fi
-
   if [[ "$claude_exit" -ne 0 ]]; then
-    echo "[solver] Claude failed with exit code $claude_exit for #$number"
+    echo "[solver] Claude failed with exit code $claude_exit for #$number" | tee -a "$issue_log"
     sync_worktree_to_develop "$REPO_DIR" "$wt_dir" "$branch" "$number"
     set_issue_status "$number" "Failed" "failed"
-    gh issue comment "$number" --repo "$REPO" --body "[solver] **Failed**: claude exited with code $claude_exit.$log_link"
+    post_execution_log "$number" "Failed" "claude exited with code $claude_exit"
     return
   fi
 
@@ -365,10 +351,10 @@ PROMPT_EOF
   commit_count=$(git -C "$wt_dir" rev-list --count "origin/$base_branch".."$branch" 2>/dev/null || echo "0")
 
   if [[ "$commit_count" -eq 0 ]]; then
-    echo "[solver] No commits made for #$number — marking as failed"
+    echo "[solver] No commits made for #$number — marking as failed" | tee -a "$issue_log"
     sync_worktree_to_develop "$REPO_DIR" "$wt_dir" "$branch" "$number"
     set_issue_status "$number" "Failed" "failed"
-    gh issue comment "$number" --repo "$REPO" --body "[solver] **Failed**: claude produced no commits.$log_link"
+    post_execution_log "$number" "Failed" "claude produced no commits"
     return
   fi
 
@@ -387,17 +373,17 @@ PROMPT_EOF
     pr_url=$(gh pr create --repo "$REPO" --head "$branch" --base "$base_branch" --title "$title" --body "$(cat <<PR_EOF
 Closes #$number
 
-Automated by gh-claudecode solver.$log_link
+Automated by gh-claudecode solver.
 PR_EOF
 )")
-    echo "[solver] PR created: $pr_url"
+    echo "[solver] PR created: $pr_url" | tee -a "$issue_log"
   fi
 
   # Move to In Review
   set_issue_status "$number" "In Review" "in-review"
 
-  # Comment with PR URL
-  gh issue comment "$number" --repo "$REPO" --body "[solver] PR created: $pr_url — awaiting review.$log_link"
+  # Post execution log (success) and comment with PR
+  post_execution_log "$number" "Success" "PR created: $pr_url"
 
   echo "[solver] Issue #$number → In Review (worktree kept at $wt_dir)"
 }
