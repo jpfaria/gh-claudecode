@@ -478,6 +478,41 @@ merge_to_develop() {
   echo "[lib] ✓ $branch merged into develop and pushed"
 }
 
+# Sync worktree to develop: commit pending changes, push, merge into develop
+# Usage: sync_worktree_to_develop <repo_dir> <wt_dir> <branch> <issue_number>
+sync_worktree_to_develop() {
+  local repo_dir="$1"
+  local wt_dir="$2"
+  local branch="$3"
+  local issue_number="$4"
+
+  if [[ ! -d "$wt_dir" ]]; then
+    echo "[lib] No worktree at $wt_dir — skipping sync"
+    return
+  fi
+
+  # Commit any uncommitted changes
+  local has_changes
+  has_changes=$(git -C "$wt_dir" status --porcelain 2>/dev/null)
+  if [[ -n "$has_changes" ]]; then
+    echo "[lib] Committing pending changes in worktree for #$issue_number"
+    git -C "$wt_dir" add -A 2>/dev/null
+    git -C "$wt_dir" commit -m "WIP: partial work on issue #$issue_number" 2>/dev/null || true
+  fi
+
+  # Push branch
+  git -C "$wt_dir" push -u origin "$branch" 2>/dev/null || {
+    git -C "$wt_dir" push -u origin "$branch" --force-with-lease 2>/dev/null || {
+      echo "[lib] Warning: could not push $branch"
+      return 1
+    }
+  }
+  echo "[lib] ✓ Pushed $branch"
+
+  # Merge into develop
+  merge_to_develop "$repo_dir" "$branch"
+}
+
 # All workflow labels (used for cleanup)
 ALL_WORKFLOW_LABELS="refining ready approved in-progress in-review done failed"
 

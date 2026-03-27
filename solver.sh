@@ -202,9 +202,14 @@ check_stale() {
   if [[ "$elapsed" -gt "$SOLVER_TIMEOUT" ]]; then
     echo "[solver] Issue #$number timed out (${elapsed}s > ${SOLVER_TIMEOUT}s)"
 
-    # Cleanup worktree if exists
-    if [[ -d "$WORKTREE_DIR/issue-$number" ]]; then
-      git -C "$REPO_DIR" worktree remove "$WORKTREE_DIR/issue-$number" --force || true
+    # Sync worktree to develop before marking as failed
+    local stale_wt="$WORKTREE_DIR/issue-$number"
+    if [[ -d "$stale_wt" ]]; then
+      local stale_branch
+      stale_branch=$(git -C "$stale_wt" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+      if [[ -n "$stale_branch" ]]; then
+        sync_worktree_to_develop "$REPO_DIR" "$stale_wt" "$stale_branch" "$number"
+      fi
     fi
 
     # Upload partial log if exists
@@ -340,41 +345,26 @@ PROMPT_EOF
 
   if [[ "$claude_exit" -ne 0 ]]; then
     echo "[solver] Claude failed with exit code $claude_exit for #$number"
+    sync_worktree_to_develop "$REPO_DIR" "$wt_dir" "$branch" "$number"
     set_issue_status "$number" "Failed" "failed"
     gh issue comment "$number" --repo "$REPO" --body "[solver] **Failed**: claude exited with code $claude_exit.$log_link"
-    git -C "$REPO_DIR" worktree remove "$wt_dir" --force || true
     return
   fi
 
   # Check if any commits were made
   local commit_count
-  commit_count=$(git -C "$wt_dir" rev-list --count "$base_branch".."$branch" 2>/dev/null || echo "0")
+  commit_count=$(git -C "$wt_dir" rev-list --count "origin/$base_branch".."$branch" 2>/dev/null || echo "0")
 
   if [[ "$commit_count" -eq 0 ]]; then
     echo "[solver] No commits made for #$number — marking as failed"
+    sync_worktree_to_develop "$REPO_DIR" "$wt_dir" "$branch" "$number"
     set_issue_status "$number" "Failed" "failed"
     gh issue comment "$number" --repo "$REPO" --body "[solver] **Failed**: claude produced no commits.$log_link"
-    git -C "$REPO_DIR" worktree remove "$wt_dir" --force || true
     return
   fi
 
-  # Push branch
-  echo "[solver] Pushing branch $branch"
-  git -C "$wt_dir" push -u origin "$branch" 2>&1 || {
-    # If push fails, try force push (branch may have diverged from previous failed attempt)
-    echo "[solver] Push failed, trying force push..."
-    git -C "$wt_dir" push -u origin "$branch" --force-with-lease 2>&1 || {
-      echo "[solver] Force push also failed for #$number"
-      set_issue_status "$number" "Failed" "failed"
-      gh issue comment "$number" --repo "$REPO" --body "[solver] **Failed**: could not push branch $branch.$log_link"
-      return
-    }
-  }
-
-  # Merge into develop worktree
-  merge_to_develop "$REPO_DIR" "$branch" || {
-    echo "[solver] Warning: could not merge into develop, continuing with PR"
-  }
+  # Sync: commit, push, merge to develop
+  sync_worktree_to_develop "$REPO_DIR" "$wt_dir" "$branch" "$number"
 
   # Create PR if doesn't exist
   local existing_pr
