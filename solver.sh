@@ -86,8 +86,8 @@ if [[ -z "$REPO_DIR" ]]; then
   fi
 fi
 
-# Worktrees go next to the repo (sibling directory)
-WORKTREE_DIR="$(dirname "$REPO_DIR")/$(basename "$REPO_DIR")-worktrees"
+# Worktrees inside the repo
+WORKTREE_DIR="$REPO_DIR/.worktrees"
 mkdir -p "$WORKTREE_DIR"
 
 if [[ ! -d "$REPO_DIR/.git" ]]; then
