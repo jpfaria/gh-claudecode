@@ -269,10 +269,15 @@ PROMPT
     return
   fi
 
+  # Strip code fences and whitespace from response for detection
+  local clean_response
+  clean_response=$(echo "$response" | sed 's/^```.*//g' | sed '/^$/d')
   local first_line
-  first_line=$(echo "$response" | head -n1)
+  first_line=$(echo "$clean_response" | head -n1 | tr -d '[:space:]')
 
   if [[ "$first_line" == "SPLIT_ISSUES" ]]; then
+    # Use cleaned response for parsing
+    response="$clean_response"
     echo "[refiner] Splitting issue #$number into sub-issues"
 
     # Parse sub-issues from response (split by "---\nISSUE:")
