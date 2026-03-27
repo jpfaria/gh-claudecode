@@ -60,6 +60,32 @@ done
 echo "[refiner] Starting for $REPO (interval: ${REFINER_INTERVAL}s, model: $CLAUDE_MODEL)"
 
 # ---------------------------------------------------------------------------
+# Load refiner skill + project context
+# ---------------------------------------------------------------------------
+
+REFINER_SKILL=""
+if [[ -f "$SCRIPT_DIR/skills/refiner-interview.md" ]]; then
+  REFINER_SKILL=$(cat "$SCRIPT_DIR/skills/refiner-interview.md")
+  echo "[refiner] Loaded interview skill"
+fi
+
+REPO_CONTEXT=""
+fetch_repo_file() {
+  local path="$1"
+  gh api "repos/$REPO/contents/$path" -q '.content' 2>/dev/null | base64 -d 2>/dev/null || echo ""
+}
+
+echo "[refiner] Loading project context from $REPO..."
+claude_md=$(fetch_repo_file "CLAUDE.md")
+if [[ -n "$claude_md" ]]; then
+  REPO_CONTEXT="## Project Context (CLAUDE.md)
+${claude_md}"
+  echo "[refiner] Loaded CLAUDE.md"
+else
+  echo "[refiner] Warning: no CLAUDE.md found in $REPO"
+fi
+
+# ---------------------------------------------------------------------------
 # Functions
 # ---------------------------------------------------------------------------
 
@@ -110,11 +136,19 @@ start_refinement() {
 
   local prompt
   prompt=$(cat <<PROMPT
-You are a friendly product assistant helping to understand a GitHub issue from the repository **$REPO**.
+## Your Skill (how to behave)
 
-IMPORTANT: This issue is about the $REPO project, NOT about the tool posting this comment. Respond in the context of that project.
+${REFINER_SKILL}
 
-IMPORTANT: You are talking to an END USER, not a developer. Do NOT ask technical questions about files, modules, architecture, code, or complexity. Only ask about what the user experiences and what they want.
+## Project Context (what the project is about)
+
+${REPO_CONTEXT}
+
+---
+
+## Current Task
+
+This is a NEW issue that just arrived. Start the interview.
 
 Issue #$number: $title
 
@@ -123,16 +157,8 @@ $body
 
 ---
 
-Before this issue can move to development, we need to understand these 4 items:
-
-1. **Problem / objective** — what is happening (or not happening) and why it matters
-2. **Expected behavior** — what the user expects to see or experience instead
-3. **Type** — is this a bug (something broken), a feature (something new), or an enhancement (improving something existing)?
-4. **Priority** — how important is this? low (nice to have), medium (should fix soon), high (blocking work)
-
-Analyze the issue text and determine which items are already clear. For missing items, ask simple questions that a non-technical user can answer. Focus on the user experience, not the implementation.
-
-Reply ONLY with the comment text to be posted on the issue. Be concise, friendly, use markdown. Write in the same language as the issue (if Portuguese, reply in Portuguese).
+Follow your skill instructions. Start gathering requirements from the user.
+Reply ONLY with the comment text to be posted on the issue.
 PROMPT
   )
 
@@ -195,11 +221,19 @@ continue_refinement() {
 
   local prompt
   prompt=$(cat <<PROMPT
-You are a friendly product assistant refining a GitHub issue from the repository **$REPO**.
+## Your Skill (how to behave)
 
-IMPORTANT: This issue is about the $REPO project, NOT about the tool posting this comment. Respond in the context of that project.
+${REFINER_SKILL}
 
-IMPORTANT: You are talking to an END USER, not a developer. Do NOT ask technical questions about files, modules, architecture, code, or complexity. Only ask about what the user experiences and what they want.
+## Project Context (what the project is about)
+
+${REPO_CONTEXT}
+
+---
+
+## Current Task
+
+This is an ONGOING conversation. The user has replied. Continue the interview.
 
 Issue #$number: $title
 
@@ -211,23 +245,13 @@ $comments
 
 ---
 
-The following 4 items must be clear before this issue can move to development:
+Follow your skill instructions. Check if all functional requirements are clear.
 
-1. **Problem / objective** — what is happening (or not happening) and why it matters
-2. **Expected behavior** — what the user expects to see or experience instead
-3. **Type** — bug (something broken), feature (something new), or enhancement (improving existing)
-4. **Priority** — low (nice to have), medium (should fix soon), high (blocking work)
+If ANY are missing: reply with a follow-up question (following your skill rules).
 
-Analyze ALL content above (body + comments). If ALL 4 items can be confidently filled from the existing information, respond with EXACTLY:
+If ALL are clear: assemble the full specification and respond with the CHECKLIST_COMPLETE block as defined in your skill. Include the technical section (you infer it from project knowledge).
 
-CHECKLIST_COMPLETE
----
-- [x] **Problem / objective** — <filled summary>
-- [x] **Expected behavior** — <filled summary>
-- [x] **Type** — <filled value>
-- [x] **Priority** — <filled value>
-
-If ANY items are still missing or unclear, respond ONLY with a follow-up comment asking simple questions that a non-technical user can answer. Focus on the experience, not the code. Be concise, friendly, use markdown. Write in the same language as the conversation.
+Reply ONLY with the comment text (if still interviewing) or the CHECKLIST_COMPLETE block (if done).
 PROMPT
   )
 
