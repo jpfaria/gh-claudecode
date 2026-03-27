@@ -261,28 +261,51 @@ solve_issue() {
     base_branch="develop"
   fi
 
-  # Setup worktree
+  # Setup worktree — clean any broken state first
   local wt_dir="$WORKTREE_DIR/issue-$number"
+  echo "[solver] Setting up worktree at $wt_dir for branch $branch" >> "$issue_log"
+
+  # Step 1: Clean any orphaned worktree reference
+  git -C "$REPO_DIR" worktree prune 2>&1 >> "$issue_log"
+
+  # Step 2: Remove existing worktree dir if it exists but is broken
   if [[ -d "$wt_dir" ]]; then
-    echo "[solver] Reusing existing worktree at $wt_dir" | tee -a "$issue_log"
-    git -C "$wt_dir" checkout "$branch" 2>&1 | tee -a "$issue_log" || true
-    git -C "$wt_dir" pull origin "$branch" 2>&1 | tee -a "$issue_log" || true
-    git -C "$wt_dir" merge "origin/$base_branch" --no-edit 2>&1 | tee -a "$issue_log" || true
-  elif git -C "$REPO_DIR" rev-parse --verify "origin/$branch" &>/dev/null; then
-    echo "[solver] Branch $branch exists on remote, creating worktree" | tee -a "$issue_log"
-    # Clean local branch if exists (may conflict with worktree)
-    git -C "$REPO_DIR" branch -D "$branch" 2>/dev/null || true
-    git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch" "origin/$branch" 2>&1 | tee -a "$issue_log" || {
-      echo "[solver] ERROR: failed to create worktree for $branch" | tee -a "$issue_log"
-    }
-    if [[ -d "$wt_dir" ]]; then
-      git -C "$wt_dir" merge "origin/$base_branch" --no-edit 2>&1 | tee -a "$issue_log" || true
+    if ! git -C "$wt_dir" status &>/dev/null; then
+      echo "[solver] Removing broken worktree at $wt_dir" >> "$issue_log"
+      git -C "$REPO_DIR" worktree remove "$wt_dir" --force 2>&1 >> "$issue_log" || rm -rf "$wt_dir"
     fi
+  fi
+
+  # Step 3: If worktree dir still exists and is valid, reuse it
+  if [[ -d "$wt_dir" ]] && git -C "$wt_dir" status &>/dev/null; then
+    echo "[solver] Reusing existing worktree" >> "$issue_log"
+    git -C "$wt_dir" fetch origin 2>&1 >> "$issue_log" || true
+    git -C "$wt_dir" checkout "$branch" 2>&1 >> "$issue_log" || true
+    git -C "$wt_dir" reset --hard "origin/$branch" 2>&1 >> "$issue_log" || true
+    git -C "$wt_dir" merge "origin/$base_branch" --no-edit 2>&1 >> "$issue_log" || true
   else
-    echo "[solver] Creating new branch $branch from $base_branch" | tee -a "$issue_log"
-    git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch" "origin/$base_branch" 2>&1 | tee -a "$issue_log" || {
-      echo "[solver] ERROR: failed to create worktree for $branch" | tee -a "$issue_log"
-    }
+    # Step 4: Create fresh worktree — clean local branch first
+    git -C "$REPO_DIR" branch -D "$branch" 2>/dev/null || true
+
+    if git -C "$REPO_DIR" rev-parse --verify "origin/$branch" &>/dev/null; then
+      echo "[solver] Creating worktree from remote branch origin/$branch" >> "$issue_log"
+      git -C "$REPO_DIR" worktree add "$wt_dir" "$branch" --track -b "$branch" "origin/$branch" 2>&1 >> "$issue_log" || {
+        # Fallback: try without -b
+        git -C "$REPO_DIR" worktree add "$wt_dir" "origin/$branch" 2>&1 >> "$issue_log" || {
+          echo "[solver] ERROR: all worktree creation attempts failed" >> "$issue_log"
+        }
+      }
+    else
+      echo "[solver] Creating new worktree from origin/$base_branch" >> "$issue_log"
+      git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch" "origin/$base_branch" 2>&1 >> "$issue_log" || {
+        echo "[solver] ERROR: worktree creation failed" >> "$issue_log"
+      }
+    fi
+
+    # Merge develop into the new branch
+    if [[ -d "$wt_dir" ]]; then
+      git -C "$wt_dir" merge "origin/$base_branch" --no-edit 2>&1 >> "$issue_log" || true
+    fi
   fi
 
   # Build prompt for claude
