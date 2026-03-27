@@ -276,16 +276,139 @@ PR_EOF
 
   echo "[solver] PR created: $pr_url"
 
-  # Swap status: in-progress -> done
-  set_issue_status "$number" "Done" "done" "in-progress"
+  # Move to In Review — worktree stays alive for potential retry
+  set_issue_status "$number" "In Review" "in-review" "in-progress"
 
   # Comment with PR URL
-  gh issue comment "$number" --repo "$REPO" --body "[solver] PR created: $pr_url"
+  gh issue comment "$number" --repo "$REPO" --body "[solver] PR created: $pr_url — awaiting review."
 
-  # Cleanup worktree
-  git -C "$REPO_DIR" worktree remove "$wt_dir" --force || true
+  echo "[solver] Issue #$number → In Review (worktree kept at $wt_dir)"
+}
 
-  echo "[solver] Issue #$number solved successfully"
+# Check PRs in "In Review" status
+# - Merged → Done + cleanup worktree
+# - Changes requested → retry with review feedback
+# - Closed without merge → Failed + cleanup worktree
+check_reviews() {
+  local review_issues
+  review_issues=$(get_issues_by_board_status_with_comments "In Review")
+  local review_count
+  review_count=$(echo "$review_issues" | jq 'length')
+
+  if [[ "$review_count" -eq 0 ]]; then
+    return
+  fi
+
+  echo "[solver] Found $review_count issue(s) in review"
+
+  echo "$review_issues" | jq -c '.[]' | while IFS= read -r item; do
+    local number title
+    number=$(echo "$item" | jq -r '.number')
+    title=$(echo "$item" | jq -r '.title')
+
+    # Find the PR for this issue
+    local pr_json
+    pr_json=$(gh pr list --repo "$REPO" --json number,state,reviewDecision,headRefName \
+      --search "Closes #$number" --limit 1 2>/dev/null)
+
+    local pr_count
+    pr_count=$(echo "$pr_json" | jq 'length')
+
+    if [[ "$pr_count" -eq 0 ]]; then
+      echo "[solver] No PR found for issue #$number — skipping"
+      continue
+    fi
+
+    local pr_number pr_state review_decision branch
+    pr_number=$(echo "$pr_json" | jq -r '.[0].number')
+    pr_state=$(echo "$pr_json" | jq -r '.[0].state')
+    review_decision=$(echo "$pr_json" | jq -r '.[0].reviewDecision // ""')
+    branch=$(echo "$pr_json" | jq -r '.[0].headRefName')
+
+    local wt_dir="$WORKTREE_DIR/issue-$number"
+
+    if [[ "$pr_state" == "MERGED" ]]; then
+      echo "[solver] PR #$pr_number merged for issue #$number"
+      set_issue_status "$number" "Done" "done" "in-review"
+      gh issue comment "$number" --repo "$REPO" --body "[solver] PR #$pr_number merged. Done!"
+      # Cleanup worktree
+      if [[ -d "$wt_dir" ]]; then
+        git -C "$REPO_DIR" worktree remove "$wt_dir" --force 2>/dev/null || true
+      fi
+
+    elif [[ "$pr_state" == "CLOSED" ]]; then
+      echo "[solver] PR #$pr_number closed without merge for issue #$number"
+      set_issue_status "$number" "Failed" "failed" "in-review"
+      gh issue comment "$number" --repo "$REPO" --body "[solver] PR #$pr_number was closed without merge. Marked as failed."
+      if [[ -d "$wt_dir" ]]; then
+        git -C "$REPO_DIR" worktree remove "$wt_dir" --force 2>/dev/null || true
+      fi
+
+    elif [[ "$review_decision" == "CHANGES_REQUESTED" ]]; then
+      echo "[solver] Changes requested on PR #$pr_number for issue #$number — retrying"
+
+      # Get review comments
+      local review_comments
+      review_comments=$(gh pr view "$pr_number" --repo "$REPO" --json reviews \
+        --jq '[.reviews[] | select(.state == "CHANGES_REQUESTED") | .body] | join("\n---\n")' 2>/dev/null)
+
+      # Get inline review comments
+      local inline_comments
+      inline_comments=$(gh api "repos/$REPO/pulls/$pr_number/comments" \
+        --jq '[.[] | "\(.path):\(.line // .original_line): \(.body)"] | join("\n")' 2>/dev/null)
+
+      if [[ ! -d "$wt_dir" ]]; then
+        echo "[solver] Worktree missing for issue #$number — recreating"
+        git -C "$REPO_DIR" fetch origin
+        git -C "$REPO_DIR" worktree add "$wt_dir" "$branch" 2>/dev/null || {
+          echo "[solver] Could not recreate worktree for #$number"
+          return
+        }
+      fi
+
+      # Pull latest
+      git -C "$wt_dir" pull origin "$branch" 2>/dev/null || true
+
+      local retry_prompt
+      retry_prompt=$(cat <<RETRY_EOF
+You are fixing a GitHub PR that received "changes requested" review feedback.
+
+## Issue #$number: $title
+
+## Review Feedback
+$review_comments
+
+## Inline Comments
+$inline_comments
+
+## Instructions
+1. Read CLAUDE.md in the project root for project context and conventions.
+2. Address ALL review feedback above.
+3. Make sure the code compiles/runs without errors or warnings.
+4. Commit your fixes with a descriptive message.
+5. Do NOT push — the automation will handle pushing.
+RETRY_EOF
+)
+
+      local claude_exit=0
+      (cd "$wt_dir" && echo "$retry_prompt" | claude --model "$CLAUDE_MODEL" -p) || claude_exit=$?
+
+      if [[ "$claude_exit" -ne 0 ]]; then
+        echo "[solver] Claude retry failed for #$number (exit $claude_exit)"
+        gh issue comment "$number" --repo "$REPO" --body "[solver] Retry failed: claude exited with code $claude_exit."
+        return
+      fi
+
+      # Push new commits (updates the existing PR)
+      git -C "$wt_dir" push origin "$branch" 2>/dev/null
+
+      gh pr comment "$pr_number" --repo "$REPO" --body "[solver] Review feedback addressed. Please re-review."
+      echo "[solver] Pushed fixes for PR #$pr_number"
+
+    else
+      echo "[solver] PR #$pr_number for issue #$number — waiting for review"
+    fi
+  done
 }
 
 # ---------------------------------------------------------------------------
@@ -332,6 +455,9 @@ while true; do
 
     solve_issue "$number" "$title" "$body" "$comments_json"
   fi
+
+  # --- In Review issues (PR monitoring) ---
+  check_reviews
 
   echo "[solver] Sleeping ${SOLVER_INTERVAL}s..."
   sleep "$SOLVER_INTERVAL"
