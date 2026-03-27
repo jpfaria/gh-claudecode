@@ -555,12 +555,17 @@ init_project_board || true
 # Main polling loop
 # ---------------------------------------------------------------------------
 
+# Log directory
+LOG_DIR="$SCRIPT_DIR/.logs"
+mkdir -p "$LOG_DIR"
+
 while true; do
   echo ""
   # Clean all locks at start of each cycle
   find "$LOCK_DIR" -name "solver-issue-*" -type d -exec rmdir {} + 2>/dev/null || true
 
-  echo "[solver] Polling at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  local_cycle_ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+  echo "[solver] Polling at $local_cycle_ts"
 
   # --- Approved issues first (parallel) ---
   approved=$(get_approved_issues)
@@ -580,14 +585,17 @@ while true; do
   fi
 
   running=0
+  processed_issues=""
   echo "$approved" | jq -c '.[]' | while IFS= read -r item; do
     number=$(echo "$item" | jq -r '.number')
     title=$(echo "$item" | jq -r '.title')
     body=$(echo "$item" | jq -r '.body')
     comments_json=$(echo "$item" | jq -c '.comments')
-    echo "[solver] Starting issue #$number — $title"
 
-    solve_issue "$number" "$title" "$body" "$comments_json" &
+    local issue_log="$LOG_DIR/issue-${number}.log"
+    echo "[solver] Starting issue #$number — $title (log: $issue_log)"
+
+    (solve_issue "$number" "$title" "$body" "$comments_json" 2>&1 | tee "$issue_log") &
     running=$((running + 1))
     if [[ "$running" -ge "$SOLVER_PARALLEL" ]]; then
       wait -n 2>/dev/null || wait
@@ -595,6 +603,42 @@ while true; do
     fi
   done
   wait
+
+  # --- Cycle summary ---
+  if [[ "$approved_count" -gt 0 ]]; then
+    echo ""
+    echo "[solver] === Cycle Summary ==="
+    for logfile in "$LOG_DIR"/issue-*.log; do
+      [[ -f "$logfile" ]] || continue
+      local_issue_num=$(basename "$logfile" .log | sed 's/issue-//')
+      local_result="unknown"
+      if grep -q "In Review" "$logfile" 2>/dev/null; then
+        local_result="✓ PR created"
+      elif grep -q "Failed" "$logfile" 2>/dev/null; then
+        local_result="✗ Failed"
+      elif grep -q "already being processed" "$logfile" 2>/dev/null; then
+        local_result="⊘ Skipped (locked)"
+      fi
+      local_pr=$(grep -o "PR created: [^ ]*" "$logfile" 2>/dev/null | head -1 | sed 's/PR created: //')
+      echo "[solver]   #$local_issue_num → $local_result ${local_pr:-}"
+    done
+    echo "[solver] ========================"
+    echo ""
+
+    # Upload combined cycle log as gist
+    local cycle_log="$LOG_DIR/cycle-$(date -u '+%Y%m%dT%H%M%SZ').log"
+    cat "$LOG_DIR"/issue-*.log > "$cycle_log" 2>/dev/null
+    if [[ -s "$cycle_log" ]]; then
+      local cycle_gist
+      cycle_gist=$(upload_log_gist "cycle" "$cycle_log" "solver cycle $local_cycle_ts")
+      if [[ -n "$cycle_gist" ]]; then
+        echo "[solver] Full cycle log: $cycle_gist"
+      fi
+    fi
+
+    # Clean issue logs for next cycle
+    rm -f "$LOG_DIR"/issue-*.log
+  fi
 
   # --- In-progress issues (stale check — after processing approved) ---
   in_progress=$(get_in_progress_issues)
