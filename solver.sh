@@ -185,12 +185,12 @@ check_stale() {
   local start_time
   start_time=$(echo "$start_comment" | sed 's/\[solver\] Started at //')
 
-  # Parse timestamp (macOS vs Linux)
+  # Parse timestamp (macOS vs Linux) — force UTC
   local started_epoch
-  if started_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%SZ" "$start_time" "+%s" 2>/dev/null); then
+  if started_epoch=$(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%SZ" "$start_time" "+%s" 2>/dev/null); then
     : # macOS succeeded
   else
-    started_epoch=$(date -d "$start_time" "+%s")
+    started_epoch=$(date -u -d "$start_time" "+%s")
   fi
 
   local now_epoch
