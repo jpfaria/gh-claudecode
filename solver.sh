@@ -232,16 +232,10 @@ solve_issue() {
 
   echo "[solver] Branch: $branch"
 
-  # Update repo
-  git -C "$REPO_DIR" fetch origin
-
   local base_branch="main"
   if git -C "$REPO_DIR" rev-parse --verify origin/develop &>/dev/null; then
     base_branch="develop"
   fi
-
-  git -C "$REPO_DIR" checkout "$base_branch"
-  git -C "$REPO_DIR" pull origin "$base_branch"
 
   # Reuse existing branch/worktree or create new
   local wt_dir="$WORKTREE_DIR/issue-$number"
@@ -251,10 +245,10 @@ solve_issue() {
     git -C "$wt_dir" merge "$base_branch" --no-edit 2>/dev/null || true
   elif git -C "$REPO_DIR" rev-parse --verify "$branch" &>/dev/null; then
     echo "[solver] Reusing existing branch $branch"
-    git -C "$REPO_DIR" worktree add "$wt_dir" "$branch"
-    git -C "$wt_dir" merge "$base_branch" --no-edit 2>/dev/null || true
+    git -C "$REPO_DIR" worktree add "$wt_dir" "$branch" 2>/dev/null
+    git -C "$wt_dir" merge "origin/$base_branch" --no-edit 2>/dev/null || true
   else
-    git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch"
+    git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch" "origin/$base_branch" 2>/dev/null
   fi
 
   # Build prompt for claude
@@ -507,6 +501,18 @@ while true; do
   approved=$(get_approved_issues)
   approved_count=$(echo "$approved" | jq 'length')
   echo "[solver] Found $approved_count approved issue(s)"
+
+  # Update repo ONCE before parallel processing
+  if [[ "$approved_count" -gt 0 ]]; then
+    git -C "$REPO_DIR" fetch origin 2>/dev/null
+    if git -C "$REPO_DIR" rev-parse --verify origin/develop &>/dev/null; then
+      git -C "$REPO_DIR" checkout develop 2>/dev/null
+      git -C "$REPO_DIR" pull origin develop 2>/dev/null
+    else
+      git -C "$REPO_DIR" checkout main 2>/dev/null
+      git -C "$REPO_DIR" pull origin main 2>/dev/null
+    fi
+  fi
 
   running=0
   echo "$approved" | jq -c '.[]' | while IFS= read -r item; do
