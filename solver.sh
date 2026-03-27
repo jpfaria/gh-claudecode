@@ -465,6 +465,9 @@ init_project_board || true
 
 while true; do
   echo ""
+  # Clean all locks at start of each cycle
+  find "$LOCK_DIR" -name "solver-issue-*" -type d -exec rmdir {} + 2>/dev/null || true
+
   echo "[solver] Polling at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
   # --- In-progress issues (stale check placeholder) ---

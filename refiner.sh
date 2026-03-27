@@ -312,6 +312,9 @@ init_project_board || true
 
 while true; do
   echo ""
+  # Clean all locks at start of each cycle
+  find "$LOCK_DIR" -name "issue-*" -type d -exec rmdir {} + 2>/dev/null || true
+
   echo "[refiner] Polling at $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
   # --- New issues (no labels) ---
