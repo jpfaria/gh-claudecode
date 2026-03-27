@@ -264,21 +264,25 @@ solve_issue() {
   # Setup worktree
   local wt_dir="$WORKTREE_DIR/issue-$number"
   if [[ -d "$wt_dir" ]]; then
-    echo "[solver] Reusing existing worktree at $wt_dir"
-    git -C "$wt_dir" checkout "$branch" 2>/dev/null || true
-    git -C "$wt_dir" pull origin "$branch" 2>/dev/null || true
-    git -C "$wt_dir" merge "origin/$base_branch" --no-edit 2>/dev/null || true
+    echo "[solver] Reusing existing worktree at $wt_dir" | tee -a "$issue_log"
+    git -C "$wt_dir" checkout "$branch" 2>&1 | tee -a "$issue_log" || true
+    git -C "$wt_dir" pull origin "$branch" 2>&1 | tee -a "$issue_log" || true
+    git -C "$wt_dir" merge "origin/$base_branch" --no-edit 2>&1 | tee -a "$issue_log" || true
   elif git -C "$REPO_DIR" rev-parse --verify "origin/$branch" &>/dev/null; then
-    echo "[solver] Branch $branch exists on remote, creating worktree"
-    git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch" "origin/$branch" 2>/dev/null || {
-      # Branch may exist locally but not as worktree
-      git -C "$REPO_DIR" branch -D "$branch" 2>/dev/null || true
-      git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch" "origin/$branch" 2>/dev/null
+    echo "[solver] Branch $branch exists on remote, creating worktree" | tee -a "$issue_log"
+    # Clean local branch if exists (may conflict with worktree)
+    git -C "$REPO_DIR" branch -D "$branch" 2>/dev/null || true
+    git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch" "origin/$branch" 2>&1 | tee -a "$issue_log" || {
+      echo "[solver] ERROR: failed to create worktree for $branch" | tee -a "$issue_log"
     }
-    git -C "$wt_dir" merge "origin/$base_branch" --no-edit 2>/dev/null || true
+    if [[ -d "$wt_dir" ]]; then
+      git -C "$wt_dir" merge "origin/$base_branch" --no-edit 2>&1 | tee -a "$issue_log" || true
+    fi
   else
-    echo "[solver] Creating new branch $branch from $base_branch"
-    git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch" "origin/$base_branch" 2>/dev/null
+    echo "[solver] Creating new branch $branch from $base_branch" | tee -a "$issue_log"
+    git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch" "origin/$base_branch" 2>&1 | tee -a "$issue_log" || {
+      echo "[solver] ERROR: failed to create worktree for $branch" | tee -a "$issue_log"
+    }
   fi
 
   # Build prompt for claude
@@ -305,17 +309,20 @@ $issue_comments
 PROMPT_EOF
 )
 
+  # Verify worktree exists
+  if [[ ! -d "$wt_dir" ]]; then
+    echo "[solver] ERROR: worktree $wt_dir does not exist!" | tee -a "$issue_log"
+    set_issue_status "$number" "Failed" "failed"
+    post_execution_log "$LOG_DIR" "$number" "solver" "Failed" "worktree does not exist: $wt_dir"
+    return
+  fi
+
   # Run claude with stream-json — output direct to file (unbuffered, one JSON line per event)
   echo "[solver] Running claude on worktree $wt_dir" >> "$issue_log"
   local claude_exit=0
 
-  # Show log in real-time on terminal
-  tail -f "$issue_log" 2>/dev/null | grep --line-buffered -o '"result":"[^"]*"' &
-  local tail_pid=$!
-
   # Claude writes directly to log file — no pipe buffering
-  cd "$wt_dir" && echo "$prompt" | claude --model "$CLAUDE_MODEL" --output-format stream-json --verbose -p >> "$issue_log" 2>&1 || claude_exit=$?
-  cd "$SCRIPT_DIR"
+  (cd "$wt_dir" && echo "$prompt" | claude --model "$CLAUDE_MODEL" --output-format stream-json --verbose -p >> "$issue_log" 2>&1) || claude_exit=$?
 
   kill "$tail_pid" 2>/dev/null || true
   wait "$tail_pid" 2>/dev/null || true
