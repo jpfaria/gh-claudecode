@@ -235,8 +235,14 @@ solve_issue() {
   git -C "$REPO_DIR" checkout "$base_branch"
   git -C "$REPO_DIR" pull origin "$base_branch"
 
-  # Create worktree
+  # Clean up stale branch/worktree from previous failed attempts
   local wt_dir="$WORKTREE_DIR/issue-$number"
+  if [[ -d "$wt_dir" ]]; then
+    git -C "$REPO_DIR" worktree remove "$wt_dir" --force 2>/dev/null || true
+  fi
+  git -C "$REPO_DIR" branch -D "$branch" 2>/dev/null || true
+
+  # Create worktree
   git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch"
 
   # Build prompt for claude
