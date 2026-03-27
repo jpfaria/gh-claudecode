@@ -14,6 +14,7 @@ source "$SCRIPT_DIR/lib.sh"
 
 # Default values
 REPO="${REPO:-}"
+REPO_DIR="${REPO_DIR:-}"
 SOLVER_INTERVAL="${SOLVER_INTERVAL:-600}"
 SOLVER_TIMEOUT="${SOLVER_TIMEOUT:-3600}"
 CLAUDE_MODEL="${CLAUDE_MODEL:-claude-sonnet-4-6}"
@@ -36,6 +37,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --model)
       CLAUDE_MODEL="$2"
+      shift 2
+      ;;
+    --repo-dir)
+      REPO_DIR="$2"
       shift 2
       ;;
     *)
@@ -63,28 +68,35 @@ for cmd in gh claude jq git; do
 done
 
 # ---------------------------------------------------------------------------
-# Clone or update repo
+# Repo setup
 # ---------------------------------------------------------------------------
 
 mkdir -p "$WORKTREE_DIR"
 
-REPO_DIR="$WORKTREE_DIR/_repo"
-
-if [[ ! -d "$REPO_DIR" ]]; then
-  echo "[solver] Cloning $REPO into $REPO_DIR"
-  gh repo clone "$REPO" "$REPO_DIR"
-else
-  echo "[solver] Updating existing repo in $REPO_DIR"
-  git -C "$REPO_DIR" fetch origin
-
-  # Checkout develop if it exists, otherwise fall back to main
-  if git -C "$REPO_DIR" rev-parse --verify origin/develop &>/dev/null; then
-    git -C "$REPO_DIR" checkout develop
-    git -C "$REPO_DIR" pull origin develop
-  else
-    git -C "$REPO_DIR" checkout main
-    git -C "$REPO_DIR" pull origin main
+# Use provided repo dir or clone
+if [[ -z "$REPO_DIR" ]]; then
+  REPO_DIR="$WORKTREE_DIR/_repo"
+  if [[ ! -d "$REPO_DIR" ]]; then
+    echo "[solver] Cloning $REPO into $REPO_DIR"
+    gh repo clone "$REPO" "$REPO_DIR"
   fi
+fi
+
+if [[ ! -d "$REPO_DIR/.git" ]]; then
+  echo "[solver] Error: $REPO_DIR is not a git repository" >&2
+  exit 1
+fi
+
+echo "[solver] Using repo at $REPO_DIR"
+git -C "$REPO_DIR" fetch origin 2>/dev/null
+
+# Checkout develop if it exists, otherwise fall back to main
+if git -C "$REPO_DIR" rev-parse --verify origin/develop &>/dev/null; then
+  git -C "$REPO_DIR" checkout develop 2>/dev/null
+  git -C "$REPO_DIR" pull origin develop 2>/dev/null
+else
+  git -C "$REPO_DIR" checkout main 2>/dev/null
+  git -C "$REPO_DIR" pull origin main 2>/dev/null
 fi
 
 # ---------------------------------------------------------------------------

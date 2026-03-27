@@ -4,6 +4,9 @@
 # Target GitHub repository (owner/repo)
 REPO="jpfaria/OpenRig"
 
+# Path to local repo (optional, avoids cloning for solver)
+# REPO_DIR="/Users/joao.faria/Projetos/github.com/jpfaria/OpenRig"
+
 # Refiner polling interval in seconds (default: 300)
 REFINER_INTERVAL=300
 

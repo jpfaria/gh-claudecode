@@ -133,15 +133,18 @@ Watches for new issues and interacts with humans to fill the checklist:
 Watches for approved issues and implements them:
 
 ```bash
-./solver.sh --repo jpfaria/OpenRig
-./solver.sh --repo jpfaria/OpenRig --interval 300 --timeout 7200
+./solver.sh --repo jpfaria/OpenRig --repo-dir /path/to/local/OpenRig
+./solver.sh --repo jpfaria/OpenRig --repo-dir /path/to/local/OpenRig --interval 300 --timeout 7200
 ```
+
+If `--repo-dir` is not provided, the solver clones the repo into `worktrees/_repo/`.
 
 ## Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `REPO` | — | GitHub repo (`owner/repo`) |
+| `REPO_DIR` | — | Path to local repo (avoids cloning) |
 | `REFINER_INTERVAL` | `300` | Refiner polling interval (seconds) |
 | `SOLVER_INTERVAL` | `600` | Solver polling interval (seconds) |
 | `SOLVER_TIMEOUT` | `3600` | Max time for in-progress before failed (seconds) |
