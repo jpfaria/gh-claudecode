@@ -384,69 +384,79 @@ check_reviews() {
         git -C "$REPO_DIR" worktree remove "$wt_dir" --force 2>/dev/null || true
       fi
 
-    elif [[ "$review_decision" == "CHANGES_REQUESTED" ]]; then
-      echo "[solver] Changes requested on PR #$pr_number for issue #$number — retrying"
+    else
+      # Check if there's a new human comment on the PR (not from solver)
+      local SOLVER_MARKER="<!-- gh-claudecode:solver -->"
+      local last_pr_comment
+      last_pr_comment=$(gh pr view "$pr_number" --repo "$REPO" --json comments \
+        --jq '.comments[-1].body // ""' 2>/dev/null)
 
-      # Get review comments
-      local review_comments
-      review_comments=$(gh pr view "$pr_number" --repo "$REPO" --json reviews \
-        --jq '[.reviews[] | select(.state == "CHANGES_REQUESTED") | .body] | join("\n---\n")' 2>/dev/null)
+      if [[ -n "$last_pr_comment" ]] && ! echo "$last_pr_comment" | grep -qF "$SOLVER_MARKER"; then
+        echo "[solver] Human commented on PR #$pr_number for issue #$number — retrying"
 
-      # Get inline review comments
-      local inline_comments
-      inline_comments=$(gh api "repos/$REPO/pulls/$pr_number/comments" \
-        --jq '[.[] | "\(.path):\(.line // .original_line): \(.body)"] | join("\n")' 2>/dev/null)
+        # Get all human comments (feedback)
+        local pr_feedback
+        pr_feedback=$(gh pr view "$pr_number" --repo "$REPO" --json comments \
+          --jq "[.comments[] | select(.body | contains(\"$SOLVER_MARKER\") | not) | .body] | join(\"\n---\n\")" 2>/dev/null)
 
-      if [[ ! -d "$wt_dir" ]]; then
-        echo "[solver] Worktree missing for issue #$number — recreating"
-        git -C "$REPO_DIR" fetch origin
-        git -C "$REPO_DIR" worktree add "$wt_dir" "$branch" 2>/dev/null || {
-          echo "[solver] Could not recreate worktree for #$number"
-          return
-        }
-      fi
+        # Get inline review comments
+        local inline_comments
+        inline_comments=$(gh api "repos/$REPO/pulls/$pr_number/comments" \
+          --jq '[.[] | "\(.path):\(.line // .original_line): \(.body)"] | join("\n")' 2>/dev/null)
 
-      # Pull latest
-      git -C "$wt_dir" pull origin "$branch" 2>/dev/null || true
+        if [[ ! -d "$wt_dir" ]]; then
+          echo "[solver] Worktree missing for issue #$number — recreating"
+          git -C "$REPO_DIR" fetch origin
+          git -C "$REPO_DIR" worktree add "$wt_dir" "$branch" 2>/dev/null || {
+            echo "[solver] Could not recreate worktree for #$number"
+            continue
+          }
+        fi
 
-      local retry_prompt
-      retry_prompt=$(cat <<RETRY_EOF
-You are fixing a GitHub PR that received "changes requested" review feedback.
+        # Pull latest
+        git -C "$wt_dir" pull origin "$branch" 2>/dev/null || true
+
+        local retry_prompt
+        retry_prompt=$(cat <<RETRY_EOF
+You are fixing a GitHub PR that received feedback from the reviewer.
 
 ## Issue #$number: $title
 
-## Review Feedback
-$review_comments
+## Reviewer Feedback
+$pr_feedback
 
-## Inline Comments
+## Inline Comments on Code
 $inline_comments
 
 ## Instructions
 1. Read CLAUDE.md in the project root for project context and conventions.
-2. Address ALL review feedback above.
+2. Address ALL reviewer feedback above.
 3. Make sure the code compiles/runs without errors or warnings.
 4. Commit your fixes with a descriptive message.
 5. Do NOT push — the automation will handle pushing.
 RETRY_EOF
 )
 
-      local claude_exit=0
-      (cd "$wt_dir" && echo "$retry_prompt" | claude --model "$CLAUDE_MODEL" -p) || claude_exit=$?
+        local claude_exit=0
+        (cd "$wt_dir" && echo "$retry_prompt" | claude --model "$CLAUDE_MODEL" -p) || claude_exit=$?
 
-      if [[ "$claude_exit" -ne 0 ]]; then
-        echo "[solver] Claude retry failed for #$number (exit $claude_exit)"
-        gh issue comment "$number" --repo "$REPO" --body "[solver] Retry failed: claude exited with code $claude_exit."
-        return
+        if [[ "$claude_exit" -ne 0 ]]; then
+          echo "[solver] Claude retry failed for #$number (exit $claude_exit)"
+          gh pr comment "$pr_number" --repo "$REPO" --body "${SOLVER_MARKER}
+Retry failed: claude exited with code $claude_exit."
+          continue
+        fi
+
+        # Push new commits (updates the existing PR)
+        git -C "$wt_dir" push origin "$branch" 2>/dev/null
+
+        gh pr comment "$pr_number" --repo "$REPO" --body "${SOLVER_MARKER}
+Feedback addressed. Please re-review."
+        echo "[solver] Pushed fixes for PR #$pr_number"
+
+      else
+        echo "[solver] PR #$pr_number for issue #$number — waiting for review"
       fi
-
-      # Push new commits (updates the existing PR)
-      git -C "$wt_dir" push origin "$branch" 2>/dev/null
-
-      gh pr comment "$pr_number" --repo "$REPO" --body "[solver] Review feedback addressed. Please re-review."
-      echo "[solver] Pushed fixes for PR #$pr_number"
-
-    else
-      echo "[solver] PR #$pr_number for issue #$number — waiting for review"
     fi
   done
 }
