@@ -289,8 +289,8 @@ solve_issue() {
 
     if git -C "$REPO_DIR" rev-parse --verify "origin/$branch" &>/dev/null; then
       echo "[solver] Creating worktree from remote branch origin/$branch" >> "$issue_log"
-      git -C "$REPO_DIR" worktree add "$wt_dir" "$branch" --track -b "$branch" "origin/$branch" 2>&1 >> "$issue_log" || {
-        # Fallback: try without -b
+      git -C "$REPO_DIR" worktree add "$wt_dir" -b "$branch" "origin/$branch" 2>&1 >> "$issue_log" || {
+        # Fallback: detached HEAD from remote branch
         git -C "$REPO_DIR" worktree add "$wt_dir" "origin/$branch" 2>&1 >> "$issue_log" || {
           echo "[solver] ERROR: all worktree creation attempts failed" >> "$issue_log"
         }
