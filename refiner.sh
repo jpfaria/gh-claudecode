@@ -138,6 +138,9 @@ start_refinement() {
 
   echo "[refiner] Starting refinement for issue #$number: $title"
 
+  # Set label FIRST to prevent duplicate processing
+  set_issue_status "$number" "Refining" "refining"
+
   local body
   body=$(gh issue view "$number" --repo "$REPO" --json body -q '.body')
 
@@ -174,7 +177,6 @@ PROMPT
 
   if [[ -n "$response" ]]; then
     echo "[refiner] Got response from claude, posting comment on #$number"
-    set_issue_status "$number" "Refining" "refining"
     gh issue comment "$number" --repo "$REPO" --body "${REFINER_MARKER}
 ${response}"
     echo "[refiner] Issue #$number labeled 'refining' and comment posted"
@@ -287,8 +289,9 @@ PROMPT
 
 ${checklist}"
 
-    gh issue edit "$number" --repo "$REPO" --body "$new_body"
+    # Set status FIRST to prevent duplicate processing
     set_issue_status "$number" "Ready" "ready" "refining"
+    gh issue edit "$number" --repo "$REPO" --body "$new_body"
     gh issue comment "$number" --repo "$REPO" --body "${REFINER_MARKER}
 Refinement complete. All checklist items have been filled. This issue is now **ready** for development."
     echo "[refiner] Issue #$number is now ready"
@@ -322,18 +325,12 @@ while true; do
   new_count=$(echo "$new_issues" | jq 'length')
   echo "[refiner] Found $new_count new issue(s)"
 
-  running=0
+  # Process new issues sequentially (label must be set before next to avoid duplicates)
   echo "$new_issues" | jq -c '.[]' | while read -r item; do
     number=$(echo "$item" | jq -r '.number')
     title=$(echo "$item" | jq -r '.title')
-    start_refinement "$number" "$title" &
-    running=$((running + 1))
-    if [[ "$running" -ge "$REFINER_PARALLEL" ]]; then
-      wait -n 2>/dev/null || wait
-      running=$((running - 1))
-    fi
+    start_refinement "$number" "$title"
   done
-  wait
 
   # --- Refining issues (single query with comments) ---
   all_refining=$(get_issues_by_board_status_with_comments "Refining")
