@@ -358,6 +358,12 @@ ${checklist}"
 Refinement complete. All checklist items have been filled. This issue is now **ready** for development."
     echo "[refiner] Issue #$number is now ready"
   else
+    # Safety check: don't post if response contains unprocessed commands
+    if echo "$clean_response" | grep -q "^SPLIT_ISSUES\|^CHECKLIST_COMPLETE"; then
+      echo "[refiner] Error: detected unprocessed command in response for #$number — check parsing"
+      echo "[refiner] Response starts with: $(echo "$clean_response" | head -3)"
+      return
+    fi
     echo "[refiner] Posting follow-up questions on issue #$number"
     gh issue comment "$number" --repo "$REPO" --body "${REFINER_MARKER}
 ${response}"
