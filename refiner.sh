@@ -182,7 +182,7 @@ start_refinement() {
 
   # Archive previous log if exists
   local issue_log="$REFINER_LOG_DIR/issue-${number}.log"
-  post_execution_log "$REFINER_LOG_DIR" "$number" "refiner" "previous run"
+  upload_execution_log "$REFINER_LOG_DIR" "$number" "refiner" "previous run"
   : > "$issue_log"
 
   echo "[refiner] Starting refinement for issue #$number: $title" | tee -a "$issue_log"
@@ -229,15 +229,24 @@ PROMPT
   # Extract result text
   response=$(echo "$raw_json" | grep '"type":"result"' | jq -r '.result // empty' 2>/dev/null | head -1)
 
+  local gist_url
+  gist_url=$(upload_execution_log "$REFINER_LOG_DIR" "$number" "refiner" "start-refinement")
+
+  local log_link=""
+  [[ -n "$gist_url" ]] && log_link="
+
+---
+[execution log]($gist_url)"
+
   if [[ -n "$response" ]]; then
     echo "[refiner] Got response from claude, posting comment on #$number"
     gh issue comment "$number" --repo "$REPO" --body "${REFINER_MARKER}
-${response}"
+${response}${log_link}"
     echo "[refiner] Issue #$number labeled 'refining' and comment posted"
-    post_execution_log "$REFINER_LOG_DIR" "$number" "refiner" "Success" "initial refinement posted"
   else
-    echo "[refiner] Error: empty response from claude for issue #$number" | tee -a "$issue_log" >&2
-    post_execution_log "$REFINER_LOG_DIR" "$number" "refiner" "Failed" "empty response from claude"
+    echo "[refiner] Error: empty response from claude for issue #$number" >&2
+    gh issue comment "$number" --repo "$REPO" --body "${REFINER_MARKER}
+[refiner] Failed: empty response from claude${log_link}"
   fi
 }
 
@@ -278,7 +287,7 @@ continue_refinement() {
 
   # Archive previous log if exists
   local issue_log="$REFINER_LOG_DIR/issue-${number}.log"
-  post_execution_log "$REFINER_LOG_DIR" "$number" "refiner" "previous run"
+  upload_execution_log "$REFINER_LOG_DIR" "$number" "refiner" "previous run"
   : > "$issue_log"
 
   echo "[refiner] Continuing refinement for issue #$number" | tee -a "$issue_log"
@@ -330,9 +339,19 @@ PROMPT
   # Extract result text
   response=$(echo "$raw_json" | grep '"type":"result"' | jq -r '.result // empty' 2>/dev/null | head -1)
 
+  # Upload gist now (before any exit path) so all comments can include the link
+  local gist_url
+  gist_url=$(upload_execution_log "$REFINER_LOG_DIR" "$number" "refiner" "continue-refinement")
+  local log_link=""
+  [[ -n "$gist_url" ]] && log_link="
+
+---
+[execution log]($gist_url)"
+
   if [[ -z "$response" ]]; then
-    echo "[refiner] Error: empty response from claude for issue #$number" | tee -a "$issue_log" >&2
-    post_execution_log "$REFINER_LOG_DIR" "$number" "refiner" "Failed" "empty response from claude"
+    echo "[refiner] Error: empty response from claude for issue #$number" >&2
+    gh issue comment "$number" --repo "$REPO" --body "${REFINER_MARKER}
+[refiner] Failed: empty response from claude${log_link}" 2>/dev/null || true
     return
   fi
 
@@ -398,18 +417,14 @@ Split from #$number" 2>/dev/null)
 This issue has been split into independent sub-issues:
 
 $(echo -e "$created_refs")
-Each sub-issue has a complete specification and is ready for development."
-    echo "[refiner] Issue #$number split completed" | tee -a "$issue_log"
-    post_execution_log "$REFINER_LOG_DIR" "$number" "refiner" "Success" "issue split into sub-issues"
+Each sub-issue has a complete specification and is ready for development.${log_link}"
 
   elif [[ "$first_line" == "CHECKLIST_COMPLETE" ]]; then
     echo "[refiner] Checklist complete for issue #$number, transitioning to ready"
 
-    # Extract checklist (everything after the first ---)
     local checklist
     checklist=$(echo "$response" | sed '1,/^---$/d')
 
-    # Append checklist to issue body
     local new_body
     new_body="${body}
 
@@ -419,33 +434,29 @@ Each sub-issue has a complete specification and is ready for development."
 
 ${checklist}"
 
-    # Set status FIRST to prevent duplicate processing
     set_issue_status "$number" "Ready" "ready"
     gh issue edit "$number" --repo "$REPO" --body "$new_body"
     gh issue comment "$number" --repo "$REPO" --body "${REFINER_MARKER}
-Refinement complete. All checklist items have been filled. This issue is now **ready** for development."
-    echo "[refiner] Issue #$number is now ready" | tee -a "$issue_log"
-    post_execution_log "$REFINER_LOG_DIR" "$number" "refiner" "Success" "checklist complete, issue ready"
+Refinement complete. All checklist items have been filled. This issue is now **ready** for development.${log_link}"
+
   else
-    # Safety check: don't post if response contains unprocessed commands anywhere
+    # Safety check: don't post if response contains unprocessed commands
     if echo "$response" | grep -qi "SPLIT_ISSUES\|CHECKLIST_COMPLETE"; then
-      echo "[refiner] Error: response contains unprocessed command for #$number" | tee -a "$issue_log"
-      echo "[refiner] Response: $(echo "$response" | head -5)" >> "$issue_log"
-      post_execution_log "$REFINER_LOG_DIR" "$number" "refiner" "Failed" "unprocessed SPLIT_ISSUES or CHECKLIST_COMPLETE in response"
+      echo "[refiner] Error: response contains unprocessed command for #$number"
+      gh issue comment "$number" --repo "$REPO" --body "${REFINER_MARKER}
+[refiner] Failed: could not parse SPLIT_ISSUES or CHECKLIST_COMPLETE response${log_link}" 2>/dev/null || true
       return
     fi
-    # Don't post empty or whitespace-only responses
+    # Don't post empty responses
     local trimmed
     trimmed=$(echo "$response" | sed 's/^[`[:space:]]*//' | sed 's/[`[:space:]]*$//')
     if [[ -z "$trimmed" ]]; then
-      echo "[refiner] Error: empty response for #$number after trimming" | tee -a "$issue_log"
-      post_execution_log "$REFINER_LOG_DIR" "$number" "refiner" "Failed" "empty response"
+      echo "[refiner] Error: empty response for #$number"
       return
     fi
-    echo "[refiner] Posting follow-up questions on issue #$number" | tee -a "$issue_log"
+    echo "[refiner] Posting follow-up questions on issue #$number"
     gh issue comment "$number" --repo "$REPO" --body "${REFINER_MARKER}
-${trimmed}"
-    post_execution_log "$REFINER_LOG_DIR" "$number" "refiner" "Success" "follow-up questions posted"
+${trimmed}${log_link}"
   fi
 }
 

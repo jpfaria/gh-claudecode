@@ -452,35 +452,24 @@ upload_log_gist() {
   echo "$gist_url"
 }
 
-# Post execution log as gist, comment on issue, delete local log
-# Usage: post_execution_log <log_dir> <number> <agent_name> <status> [extra_message]
-post_execution_log() {
+# Upload execution log as gist and delete local log. Returns gist URL on stdout.
+# Usage: gist_url=$(upload_execution_log <log_dir> <number> <agent_name> <status>)
+upload_execution_log() {
   local log_dir="$1"
   local number="$2"
   local agent="$3"
   local exec_status="$4"
-  local extra_msg="${5:-}"
 
   local issue_log="$log_dir/issue-${number}.log"
   if [[ ! -f "$issue_log" ]] || [[ ! -s "$issue_log" ]]; then
+    echo ""
     return
   fi
 
   local gist_url
-  gist_url=$(upload_log_gist "$number" "$issue_log" "[$agent] execution log — $exec_status")
-  if [[ -n "$gist_url" ]]; then
-    local body="[$agent] Execution log ($exec_status): $gist_url"
-    if [[ -n "$extra_msg" ]]; then
-      body="[$agent] **$exec_status**: $extra_msg
-
-[Execution log]($gist_url)"
-    fi
-    gh issue comment "$number" --repo "$REPO" --body "$body" 2>/dev/null || true
-    echo "[$agent] Log posted: $gist_url"
-
-    # Delete log after posting
-    rm -f "$issue_log"
-  fi
+  gist_url=$(upload_log_gist "$number" "$issue_log" "[$agent] $exec_status")
+  rm -f "$issue_log"
+  echo "$gist_url"
 }
 
 # All workflow labels (used for cleanup)

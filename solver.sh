@@ -129,8 +129,16 @@ check_stale() {
       fi
     fi
 
+    local stale_gist
+    stale_gist=$(upload_execution_log "$LOG_DIR" "$number" "solver" "timeout")
+    local stale_link=""
+    [[ -n "$stale_gist" ]] && stale_link="
+
+---
+[execution log]($stale_gist)"
+
     set_issue_status "$number" "Failed" "failed"
-    post_execution_log "$LOG_DIR" "$number" "solver" "Failed" "log idle for ${idle}s (limit: ${SOLVER_TIMEOUT}s)"
+    gh issue comment "$number" --repo "$REPO" --body "[solver] **Failed**: log idle for ${idle}s (limit: ${SOLVER_TIMEOUT}s)${stale_link}" 2>/dev/null || true
   else
     echo "[solver] Issue #$number log active (${idle}s idle)"
   fi
@@ -151,7 +159,7 @@ solve_issue() {
 
   # Setup log
   local issue_log="$LOG_DIR/issue-${number}.log"
-  post_execution_log "$LOG_DIR" "$number" "solver" "previous run"
+  upload_execution_log "$LOG_DIR" "$number" "solver" "previous run"
   : > "$issue_log"
 
   echo "[solver] Solving issue #$number — $title" | tee -a "$issue_log"
@@ -184,8 +192,15 @@ solve_issue() {
     echo "[solver] Cloning repo for issue #$number" >> "$issue_log"
     git clone --reference "$REPO_DIR" "$(git -C "$REPO_DIR" remote get-url origin)" "$clone_dir" 2>&1 >> "$issue_log" || {
       echo "[solver] ERROR: clone failed" >> "$issue_log"
+      local clone_gist
+      clone_gist=$(upload_execution_log "$LOG_DIR" "$number" "solver" "clone-failed")
+      local clone_link=""
+      [[ -n "$clone_gist" ]] && clone_link="
+
+---
+[execution log]($clone_gist)"
       set_issue_status "$number" "Failed" "failed"
-      post_execution_log "$LOG_DIR" "$number" "solver" "Failed" "git clone failed"
+      gh issue comment "$number" --repo "$REPO" --body "[solver] **Failed**: git clone failed${clone_link}" 2>/dev/null || true
       return
     }
   fi
@@ -235,8 +250,15 @@ PROMPT_EOF
   # Verify clone exists
   if [[ ! -d "$clone_dir/.git" ]]; then
     echo "[solver] ERROR: clone dir $clone_dir does not exist!" | tee -a "$issue_log"
+    local missing_gist
+    missing_gist=$(upload_execution_log "$LOG_DIR" "$number" "solver" "missing-clone")
+    local missing_link=""
+    [[ -n "$missing_gist" ]] && missing_link="
+
+---
+[execution log]($missing_gist)"
     set_issue_status "$number" "Failed" "failed"
-    post_execution_log "$LOG_DIR" "$number" "solver" "Failed" "clone directory missing"
+    gh issue comment "$number" --repo "$REPO" --body "[solver] **Failed**: clone directory missing${missing_link}" 2>/dev/null || true
     return
   fi
 
@@ -244,6 +266,15 @@ PROMPT_EOF
   echo "[solver] Running claude on $clone_dir" >> "$issue_log"
   local claude_exit=0
   (cd "$clone_dir" && echo "$prompt" | claude --model "$CLAUDE_MODEL" --output-format stream-json --verbose -p >> "$issue_log" 2>&1) || claude_exit=$?
+
+  # Upload gist now so all exit paths can include the link
+  local gist_url
+  gist_url=$(upload_execution_log "$LOG_DIR" "$number" "solver" "solve-issue")
+  local log_link=""
+  [[ -n "$gist_url" ]] && log_link="
+
+---
+[execution log]($gist_url)"
 
   # Extract result
   local final_result
@@ -253,13 +284,12 @@ PROMPT_EOF
   fi
 
   if [[ "$claude_exit" -ne 0 ]]; then
-    echo "[solver] Claude failed with exit code $claude_exit for #$number" | tee -a "$issue_log"
-    # Commit and push partial work
+    echo "[solver] Claude failed with exit code $claude_exit for #$number"
     git -C "$clone_dir" add -A 2>/dev/null
     git -C "$clone_dir" commit -m "WIP: partial work on issue #$number" 2>/dev/null || true
     git -C "$clone_dir" push origin "$branch" 2>/dev/null || true
     set_issue_status "$number" "Failed" "failed"
-    post_execution_log "$LOG_DIR" "$number" "solver" "Failed" "claude exited with code $claude_exit"
+    gh issue comment "$number" --repo "$REPO" --body "[solver] **Failed**: claude exited with code $claude_exit${log_link}" 2>/dev/null || true
     return
   fi
 
@@ -268,19 +298,18 @@ PROMPT_EOF
   commit_count=$(git -C "$clone_dir" rev-list --count "origin/$base_branch"..HEAD 2>/dev/null || echo "0")
 
   if [[ "$commit_count" -eq 0 ]]; then
-    echo "[solver] No commits made for #$number" | tee -a "$issue_log"
+    echo "[solver] No commits made for #$number"
     set_issue_status "$number" "Failed" "failed"
-    post_execution_log "$LOG_DIR" "$number" "solver" "Failed" "claude produced no commits"
+    gh issue comment "$number" --repo "$REPO" --body "[solver] **Failed**: claude produced no commits${log_link}" 2>/dev/null || true
     return
   fi
 
   # Push
-  echo "[solver] Pushing branch $branch" >> "$issue_log"
-  git -C "$clone_dir" push -u origin "$branch" 2>&1 >> "$issue_log" || {
-    git -C "$clone_dir" push -u origin "$branch" --force-with-lease 2>&1 >> "$issue_log" || {
-      echo "[solver] Push failed for #$number" | tee -a "$issue_log"
+  git -C "$clone_dir" push -u origin "$branch" 2>/dev/null || {
+    git -C "$clone_dir" push -u origin "$branch" --force-with-lease 2>/dev/null || {
+      echo "[solver] Push failed for #$number"
       set_issue_status "$number" "Failed" "failed"
-      post_execution_log "$LOG_DIR" "$number" "solver" "Failed" "push failed"
+      gh issue comment "$number" --repo "$REPO" --body "[solver] **Failed**: push failed${log_link}" 2>/dev/null || true
       return
     }
   }
@@ -292,7 +321,6 @@ PROMPT_EOF
   local pr_url
   if [[ -n "$existing_pr" ]]; then
     pr_url="https://github.com/$REPO/pull/$existing_pr"
-    echo "[solver] PR already exists: $pr_url"
   else
     pr_url=$(gh pr create --repo "$REPO" --head "$branch" --base "$base_branch" --title "$title" --body "$(cat <<PR_EOF
 Related to #$number
@@ -300,11 +328,10 @@ Related to #$number
 Automated by gh-claudecode solver.
 PR_EOF
 )")
-    echo "[solver] PR created: $pr_url" | tee -a "$issue_log"
   fi
 
   set_issue_status "$number" "In Review" "in-review"
-  post_execution_log "$LOG_DIR" "$number" "solver" "Success" "PR: $pr_url"
+  gh issue comment "$number" --repo "$REPO" --body "[solver] **Success**: PR created: $pr_url${log_link}" 2>/dev/null || true
 
   echo "[solver] Issue #$number → In Review"
 }
@@ -427,9 +454,18 @@ RETRY_EOF
         local claude_exit=0
         (cd "$clone_dir" && echo "$retry_prompt" | claude --model "$CLAUDE_MODEL" --output-format stream-json --verbose -p >> "$claude_log" 2>&1) || claude_exit=$?
 
+        local retry_gist
+        retry_gist=$(upload_execution_log "$LOG_DIR" "$number" "solver" "retry")
+        local retry_log_link=""
+        [[ -n "$retry_gist" ]] && retry_log_link="
+
+---
+[execution log]($retry_gist)"
+
         if [[ "$claude_exit" -ne 0 ]]; then
           echo "[solver] Claude retry failed for #$number (exit $claude_exit)"
-          post_execution_log "$LOG_DIR" "$number" "solver" "Failed" "retry failed (exit $claude_exit)"
+          gh pr comment "$pr_number" --repo "$REPO" --body "${SOLVER_MARKER}
+Retry failed: claude exited with code $claude_exit${retry_log_link}"
           set_issue_status "$number" "In Review" "in-review"
           continue
         fi
@@ -438,11 +474,9 @@ RETRY_EOF
           git -C "$clone_dir" push origin "$branch" --force-with-lease 2>/dev/null || true
         }
 
-        local SOLVER_MARKER="<!-- gh-claudecode:solver -->"
         gh pr comment "$pr_number" --repo "$REPO" --body "${SOLVER_MARKER}
-Feedback addressed. Please re-review."
+Feedback addressed. Please re-review.${retry_log_link}"
 
-        post_execution_log "$LOG_DIR" "$number" "solver" "Success" "retry pushed"
         set_issue_status "$number" "In Review" "in-review"
         echo "[solver] Pushed fixes for PR #$pr_number"
       else
