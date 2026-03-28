@@ -453,66 +453,6 @@ upload_log_gist() {
   echo "$gist_url"
 }
 
-# Merge issue branch into develop worktree (main worktree)
-# Usage: merge_to_develop <repo_dir> <branch>
-merge_to_develop() {
-  local repo_dir="$1"
-  local branch="$2"
-
-  echo "[lib] Merging $branch into develop worktree..."
-  git -C "$repo_dir" fetch origin 2>/dev/null
-  git -C "$repo_dir" checkout develop 2>/dev/null || {
-    echo "[lib] Warning: could not checkout develop"
-    return 1
-  }
-  git -C "$repo_dir" pull origin develop 2>/dev/null || true
-  git -C "$repo_dir" merge "$branch" --no-edit 2>/dev/null || {
-    echo "[lib] Warning: merge conflict merging $branch into develop — aborting"
-    git -C "$repo_dir" merge --abort 2>/dev/null || true
-    return 1
-  }
-  git -C "$repo_dir" push origin develop 2>/dev/null || {
-    echo "[lib] Warning: could not push develop"
-    return 1
-  }
-  echo "[lib] ✓ $branch merged into develop and pushed"
-}
-
-# Sync worktree to develop: commit pending changes, push, merge into develop
-# Usage: sync_worktree_to_develop <repo_dir> <wt_dir> <branch> <issue_number>
-sync_worktree_to_develop() {
-  local repo_dir="$1"
-  local wt_dir="$2"
-  local branch="$3"
-  local issue_number="$4"
-
-  if [[ ! -d "$wt_dir" ]]; then
-    echo "[lib] No worktree at $wt_dir — skipping sync"
-    return
-  fi
-
-  # Commit any uncommitted changes
-  local has_changes
-  has_changes=$(git -C "$wt_dir" status --porcelain 2>/dev/null)
-  if [[ -n "$has_changes" ]]; then
-    echo "[lib] Committing pending changes in worktree for #$issue_number"
-    git -C "$wt_dir" add -A 2>/dev/null
-    git -C "$wt_dir" commit -m "WIP: partial work on issue #$issue_number" 2>/dev/null || true
-  fi
-
-  # Push branch
-  git -C "$wt_dir" push -u origin "$branch" 2>/dev/null || {
-    git -C "$wt_dir" push -u origin "$branch" --force-with-lease 2>/dev/null || {
-      echo "[lib] Warning: could not push $branch"
-      return 1
-    }
-  }
-  echo "[lib] ✓ Pushed $branch"
-
-  # Merge into develop
-  merge_to_develop "$repo_dir" "$branch"
-}
-
 # Post execution log as gist, comment on issue, delete local log
 # Usage: post_execution_log <log_dir> <number> <agent_name> <status> [extra_message]
 post_execution_log() {
