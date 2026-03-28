@@ -323,9 +323,6 @@ PROMPT_EOF
   # Claude writes directly to log file — no pipe buffering
   (cd "$wt_dir" && echo "$prompt" | claude --model "$CLAUDE_MODEL" --output-format stream-json --verbose -p >> "$issue_log" 2>&1) || claude_exit=$?
 
-  kill "$tail_pid" 2>/dev/null || true
-  wait "$tail_pid" 2>/dev/null || true
-
   # Extract final result for display
   local final_result
   final_result=$(grep '"type":"result"' "$issue_log" | tail -1 | jq -r '.result // empty' 2>/dev/null)
