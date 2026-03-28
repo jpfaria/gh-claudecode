@@ -144,53 +144,34 @@ get_approved_issues() {
 }
 
 get_in_progress_issues() {
-  get_issues_by_board_status_with_comments "In Progress"
+  get_issues_by_board_status "In Progress"
 }
 
-# Check stale using pre-fetched comments (no extra API calls)
-# Args: number comments_json
+# Check stale based on log file modification time (not comments)
+# If the log file hasn't been modified in SOLVER_TIMEOUT seconds, the process is stuck
+# Args: number
 check_stale() {
   local number="$1"
-  local comments_json="$2"
+  local issue_log="$LOG_DIR/issue-${number}.log"
 
-  echo "[solver] Checking stale for issue #$number"
-
-  # Find the LATEST "[solver] Started at" that comes AFTER any "[solver] Marked as failed" or "[solver] Failed"
-  # This handles retries: old timestamps are ignored if there was a failure after them
-  local start_comment
-  start_comment=$(echo "$comments_json" | jq -r '
-    # Find index of last failure comment
-    (to_entries | map(select(.value | test("^\\[solver\\] (Marked as failed|Failed)"))) | last // {key: -1}) as $last_fail |
-    # Find Started comments after the last failure
-    [to_entries[] | select(.key > $last_fail.key) | select(.value | startswith("[solver] Started at")) | .value] | last // empty
-  ')
-
-  if [[ -z "$start_comment" ]]; then
-    echo "[solver] No '[solver] Started at' comment found for #$number — marking as failed"
-    set_issue_status "$number" "Failed" "failed"
-    post_execution_log "$LOG_DIR" "$number" "solver" "Failed" "no start timestamp found"
+  # No log file = process hasn't started writing yet, skip
+  if [[ ! -f "$issue_log" ]]; then
+    echo "[solver] No log file for issue #$number — skipping stale check"
     return
   fi
 
-  # Extract timestamp from comment text: "[solver] Started at 2026-03-26T21:00:00Z"
-  local start_time
-  start_time=$(echo "$start_comment" | sed 's/\[solver\] Started at //')
-
-  # Parse timestamp (macOS vs Linux) — force UTC
-  local started_epoch
-  if started_epoch=$(TZ=UTC date -j -f "%Y-%m-%dT%H:%M:%SZ" "$start_time" "+%s" 2>/dev/null); then
-    : # macOS succeeded
+  # Get last modification time of log file
+  local last_mod now_epoch idle
+  if last_mod=$(stat -f %m "$issue_log" 2>/dev/null); then
+    : # macOS
   else
-    started_epoch=$(date -u -d "$start_time" "+%s")
+    last_mod=$(stat -c %Y "$issue_log" 2>/dev/null) # Linux
   fi
-
-  local now_epoch
   now_epoch=$(date +%s)
+  idle=$(( now_epoch - last_mod ))
 
-  local elapsed=$(( now_epoch - started_epoch ))
-
-  if [[ "$elapsed" -gt "$SOLVER_TIMEOUT" ]]; then
-    echo "[solver] Issue #$number timed out (${elapsed}s > ${SOLVER_TIMEOUT}s)"
+  if [[ "$idle" -gt "$SOLVER_TIMEOUT" ]]; then
+    echo "[solver] Issue #$number log idle for ${idle}s (limit: ${SOLVER_TIMEOUT}s) — marking as failed"
 
     # Sync worktree to develop before marking as failed
     local stale_wt="$WORKTREE_DIR/issue-$number"
@@ -203,9 +184,9 @@ check_stale() {
     fi
 
     set_issue_status "$number" "Failed" "failed"
-    post_execution_log "$LOG_DIR" "$number" "solver" "Failed" "timed out after ${elapsed}s (limit: ${SOLVER_TIMEOUT}s)"
+    post_execution_log "$LOG_DIR" "$number" "solver" "Failed" "log idle for ${idle}s (limit: ${SOLVER_TIMEOUT}s)"
   else
-    echo "[solver] Issue #$number still within timeout (${elapsed}s / ${SOLVER_TIMEOUT}s)"
+    echo "[solver] Issue #$number log active (${idle}s idle)"
   fi
 }
 
@@ -232,11 +213,6 @@ solve_issue() {
 
   # Swap status: approved -> in-progress
   set_issue_status "$number" "In Progress" "in-progress"
-
-  # Comment with start timestamp
-  local start_ts
-  start_ts=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-  gh issue comment "$number" --repo "$REPO" --body "[solver] Started at $start_ts"
 
   # Format comments for prompt
   local issue_comments
@@ -699,8 +675,7 @@ while true; do
     echo "[solver] Checking $in_progress_count in-progress issue(s) for staleness"
     echo "$in_progress" | jq -c '.[]' | while read -r issue; do
       ip_number=$(echo "$issue" | jq -r '.number')
-      ip_comments=$(echo "$issue" | jq -c '.comments')
-      check_stale "$ip_number" "$ip_comments"
+      check_stale "$ip_number"
     done
   fi
 
