@@ -366,8 +366,7 @@ get_issues_by_board_status() {
   echo "$raw" | jq --arg status "$target_status" '
     [.data.user.projectV2.items.nodes[]
      | select(.fieldValueByName.name == $status)
-     | select(.content.state == "OPEN")
-     | {number: .content.number, title: .content.title, item_id: .id}]'
+     | {number: .content.number, title: .content.title, state: .content.state, item_id: .id}]'
 }
 
 # Get issues from board with comments included (single query, avoids N+1)
@@ -425,11 +424,11 @@ get_issues_by_board_status_with_comments() {
   echo "$raw" | jq --arg status "$target_status" '
     [.data.user.projectV2.items.nodes[]
      | select(.fieldValueByName.name == $status)
-     | select(.content.state == "OPEN")
      | {
          number: .content.number,
          title: .content.title,
          body: .content.body,
+         state: .content.state,
          item_id: .id,
          comments: [.content.comments.nodes[].body],
          last_comment: (.content.comments.nodes[-1].body // ""),
