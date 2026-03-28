@@ -427,15 +427,24 @@ Refinement complete. All checklist items have been filled. This issue is now **r
     echo "[refiner] Issue #$number is now ready" | tee -a "$issue_log"
     post_execution_log "$REFINER_LOG_DIR" "$number" "refiner" "Success" "checklist complete, issue ready"
   else
-    # Safety check: don't post if response contains unprocessed commands
-    if echo "$clean_response" | grep -q "^SPLIT_ISSUES\|^CHECKLIST_COMPLETE"; then
-      echo "[refiner] Error: detected unprocessed command in response for #$number — check parsing"
-      echo "[refiner] Response starts with: $(echo "$clean_response" | head -3)"
+    # Safety check: don't post if response contains unprocessed commands anywhere
+    if echo "$response" | grep -qi "SPLIT_ISSUES\|CHECKLIST_COMPLETE"; then
+      echo "[refiner] Error: response contains unprocessed command for #$number" | tee -a "$issue_log"
+      echo "[refiner] Response: $(echo "$response" | head -5)" >> "$issue_log"
+      post_execution_log "$REFINER_LOG_DIR" "$number" "refiner" "Failed" "unprocessed SPLIT_ISSUES or CHECKLIST_COMPLETE in response"
+      return
+    fi
+    # Don't post empty or whitespace-only responses
+    local trimmed
+    trimmed=$(echo "$response" | sed 's/^[`[:space:]]*//' | sed 's/[`[:space:]]*$//')
+    if [[ -z "$trimmed" ]]; then
+      echo "[refiner] Error: empty response for #$number after trimming" | tee -a "$issue_log"
+      post_execution_log "$REFINER_LOG_DIR" "$number" "refiner" "Failed" "empty response"
       return
     fi
     echo "[refiner] Posting follow-up questions on issue #$number" | tee -a "$issue_log"
     gh issue comment "$number" --repo "$REPO" --body "${REFINER_MARKER}
-${response}"
+${trimmed}"
     post_execution_log "$REFINER_LOG_DIR" "$number" "refiner" "Success" "follow-up questions posted"
   fi
 }
