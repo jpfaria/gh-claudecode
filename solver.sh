@@ -278,8 +278,15 @@ solve_issue() {
       }
     fi
 
-    # Merge develop into the new branch
+    # Ensure we're on the correct branch (not detached HEAD)
     if [[ -d "$wt_dir" ]]; then
+      local current_branch
+      current_branch=$(git -C "$wt_dir" rev-parse --abbrev-ref HEAD 2>/dev/null)
+      if [[ "$current_branch" == "HEAD" ]]; then
+        echo "[solver] Fixing detached HEAD — creating branch $branch" >> "$issue_log"
+        git -C "$wt_dir" checkout -b "$branch" 2>&1 >> "$issue_log" || true
+      fi
+      # Merge develop into the branch
       git -C "$wt_dir" merge "origin/$base_branch" --no-edit 2>&1 >> "$issue_log" || true
     fi
   fi
@@ -340,7 +347,7 @@ PROMPT_EOF
 
   # Check if any commits were made
   local commit_count
-  commit_count=$(git -C "$wt_dir" rev-list --count "origin/$base_branch".."$branch" 2>/dev/null || echo "0")
+  commit_count=$(git -C "$wt_dir" rev-list --count "origin/$base_branch"..HEAD 2>/dev/null || echo "0")
 
   if [[ "$commit_count" -eq 0 ]]; then
     echo "[solver] No commits made for #$number — marking as failed" | tee -a "$issue_log"
