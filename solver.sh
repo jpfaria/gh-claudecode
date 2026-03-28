@@ -428,10 +428,10 @@ check_reviews() {
     number=$(echo "$item" | jq -r '.number')
     title=$(echo "$item" | jq -r '.title')
 
-    # Find the PR for this issue
+    # Find the PR for this issue by branch name pattern
     local pr_json
-    pr_json=$(gh pr list --repo "$REPO" --json number,state,reviewDecision,headRefName \
-      --search "issue #$number" --limit 1 2>/dev/null)
+    pr_json=$(gh pr list --repo "$REPO" --state all --json number,state,reviewDecision,headRefName \
+      --jq "[.[] | select(.headRefName | contains(\"issue-$number\"))]" 2>/dev/null)
 
     local pr_count
     pr_count=$(echo "$pr_json" | jq 'length')
